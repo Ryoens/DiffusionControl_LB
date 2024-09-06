@@ -1,56 +1,51 @@
+// サーバ側
 package main
 
 import (
+	"context"
 	"fmt"
-	"os"
+	"google.golang.org/grpc"
 	"log"
 	"net"
-	"context"
-	"os/signal"
-	"google.golang.org/grpc"
-	hellopb "grpc_test/pkg/grpc"
+	// "time"
+
+	pb "grpc_test/pkg/grpc"
 )
 
-type myServer struct {
-	hellopb.UnimplementedGreetingServiceServer
+type server struct {
+	pb.UnimplementedLoadBalancerServer
 }
 
-func (s *myServer) Hello(ctx context.Context, req *hellopb.HelloRequest) (*hellopb.HelloResponse, error) {
-	// リクエストからnameフィールドを取り出して
-	// "Hello, [名前]!"というレスポンスを返す
-	return &hellopb.HelloResponse{
-		Message: fmt.Sprintf("Hello, %s!", req.GetName()),
-	}, nil
+func (s *server) GetBackendStatus(ctx context.Context, req *pb.BackendRequest) (*pb.BackendStatus, error) {
+	// バックエンドサーバーの状態をチェックするロジック
+	fmt.Printf("Received health check request for server: %s\n", req.ServerName)
+	return &pb.BackendStatus{IsHealthy: true}, nil
 }
 
-func NewMyServer() *myServer{
-	return &myServer{}
+func (s *server) ControlStream(stream pb.LoadBalancer_ControlStreamServer) error {
+	for {
+		in, err := stream.Recv()
+		if err != nil {
+			log.Printf("Error receiving control message: %v", err)
+			return err
+		}
+		// 制御情報を処理し、必要ならレスポンスを返す
+		log.Printf("Received control command: %s", in.Command)
+		if in.Command == "update_policy" {
+			stream.Send(&pb.ControlResponse{Status: "ok", Info: "Policy updated"})
+		}
+	}
 }
 
 func main() {
-	// portのlistenerを作成
-	port := 8081
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
-		panic(err)
+		log.Fatalf("Failed to listen: %v", err)
 	}
-
-	// gRPCサーバを作成
 	s := grpc.NewServer()
-
-	// gRPCサーバにGreetingServiceを登録
-	hellopb.RegisterGreetingServiceServer(s, NewMyServer())
-
-	// gRPCサーバをポートと紐付け
-	go func() {
-		log.Printf("start gRPC server port: %v", port)
-		s.Serve(listener)
-	}()
-
-	// ctrl + c でshutdown
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt)
-	<-quit
-	log.Println("stopping gRPC server")
-	s.GracefulStop()
+	pb.RegisterLoadBalancerServer(s, &server{})
+	log.Printf("Server listening at %v", lis.Addr())
+	if err := s.Serve(lis); err != nil {
+		log.Fatalf("Failed to serve: %v", err)
+	}
 }

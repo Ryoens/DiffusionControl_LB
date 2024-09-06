@@ -36,7 +36,7 @@ func main(){
 		Handler: http.HandlerFunc(lbHandler),
 	}
 
-	fmt.Printf("HTTP server is listening on :%s...\n", tcp_port)
+	fmt.Printf("HTTP server is listening on %s...\n", tcp_port)
 	if err := s.ListenAndServe(); err != nil {
 		log.Fatal(err.Error())
 	}

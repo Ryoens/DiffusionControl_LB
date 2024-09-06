@@ -1,77 +1,53 @@
+// クライアント側
 package main
 
 import (
-	"fmt"
-	"bufio"
-	"log"
-	"os"
 	"context"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	hellopb "grpc_test/pkg/grpc"
-)
+	"log"
+	"time"
 
-var (
-	scanner *bufio.Scanner
-	client	hellopb.GreetingServiceClient
+	pb "grpc_test/pkg/grpc"
 )
 
 func main() {
-	fmt.Println("start gRPC Client.")
-
-	// 標準入力から文字列を受け取るスキャナ
-	scanner = bufio.NewScanner(os.Stdin)
-
-	// gRPCサーバとのコネクションを確立
-	address := "localhost:8081"
-	conn, err := grpc.Dial(
-		address,
-
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(),
-	)
+	// サーバとのコネクションを確立
+	conn, err := grpc.Dial("localhost:50051", grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
-		log.Fatal("Connection failed.")
-		return
+		log.Fatalf("Did not connect: %v", err)
 	}
 	defer conn.Close()
 
-	// gRPCクライアントを生成
-	client = hellopb.NewGreetingServiceClient(conn)
+	client := pb.NewLoadBalancerClient(conn)
 
-	for {
-		fmt.Println("1: send Request")
-		fmt.Println("2: exit")
-		fmt.Print("please enter >")
-
-		scanner.Scan()
-		in := scanner.Text()
-
-		switch in {
-		case "1":
-			Hello()
-
-		case "2":
-			fmt.Println("bye.")
-			goto M
-		}
-	}
-M:
-}
-
-func Hello() {
-	fmt.Println("Please enter your name.")
-	scanner.Scan()
-	name := scanner.Text()
-
-	req := &hellopb.HelloRequest {
-		Name: name, 
-	}
-	res, err := client.Hello(context.Background(), req)
+	// 双方向ストリーミングの制御情報送受信
+	stream, err := client.ControlStream(context.Background())
 	if err != nil {
-		fmt.Println(err)
-	} else {
-		fmt.Println(res.GetMessage())
+		log.Fatalf("Error creating stream: %v", err)
+	}
+
+	// 定期的にヘルスチェックと制御情報を送受信
+	ticker := time.NewTicker(10 * time.Second)
+	for range ticker.C {
+		// ヘルスチェック
+		req := &pb.BackendRequest{ServerName: "backend-1"}
+		res, err := client.GetBackendStatus(context.Background(), req)
+		if err != nil {
+			log.Printf("Could not get backend status: %v", err)
+		} else {
+			log.Printf("Backend is healthy: %v", res.IsHealthy)
+		}
+
+		// 制御情報の送信
+		if err := stream.Send(&pb.ControlMessage{Command: "update_policy", Payload: "new_policy_data"}); err != nil {
+			log.Fatalf("Error sending control message: %v", err)
+		}
+
+		// 制御情報の応答受信
+		in, err := stream.Recv()
+		if err != nil {
+			log.Fatalf("Error receiving control response: %v", err)
+		}
+		log.Printf("Received control response: %s", in.Info)
 	}
 }
-
