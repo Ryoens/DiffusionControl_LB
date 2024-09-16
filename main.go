@@ -36,12 +36,15 @@ var (
 const (
 	// 固定値の定義
 	tcp_port string = ":8001"
+	grpc_dest string = ":50051" // gRPCクライアントで使用
+	grpc_src string = "localhost:50052" // gRPCサーバで使用
 	sleep_time int = 1
 )
 
 func main(){
 	// http.HandleFunc("/", lbHandler)
 	go gRPC_Server()
+	go gRPC_Client()
 
 	s := http.Server{
 		Addr:	tcp_port,
@@ -104,7 +107,7 @@ func WeightedRoundRobin() Server {
 
 // gRPCサーバ
 func gRPC_Server() {
-	lis, err := net.Listen("tcp", ":50051")
+	lis, err := net.Listen("tcp", grpc_dest)
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
 	}
@@ -145,8 +148,46 @@ func (s *server) ControlStream(stream pb.LoadBalancer_ControlStreamServer) error
 }
 
 // gRPCクライアント
-func client() {
+func gRPC_Client() {
+	// サーバとのコネクションを確立
+	conn, err := grpc.Dial(grpc_src, grpc.WithInsecure(), grpc.WithBlock())
+	if err != nil {
+		log.Fatalf("No connect: %v", err)
+	}
+	defer conn.Close()
 
+	client := pb.NewLoadBalancerClient(conn)
+
+	// 双方向ストリーミングの制御情報送受信
+	stream, err := client.ControlStream(context.Background())
+	if err != nil {
+		log.Fatalf("Error creating stream: %v", err)
+	}
+
+	// 定期的にヘルスチェックと制御情報を送受信
+	ticker := time.NewTicker(time.Duration(sleep_time) * time.Second)
+	for range ticker.C {
+		// ヘルスチェック
+		req := &pb.BackendRequest{ServerName: "backend-1"}
+		res, err := client.GetBackendStatus(context.Background(), req)
+		if err != nil {
+			log.Printf("Could not get backend status: %v", err)
+		} else {
+			log.Printf("Backend is healthy: %v", res.IsHealthy)
+		}
+
+		// 制御情報の送信
+		if err := stream.Send(&pb.ControlMessage{Command: "update_policy", Payload: "new_policy_data"}); err != nil {
+			log.Fatalf("Error sending control message: %v", err)
+		}
+
+		// 制御情報の応答受信
+		in, err := stream.Recv()
+		if err != nil {
+			log.Fatalf("Error receiving control response: %v", err)
+		}
+		log.Printf("Received control response: %s", in.Info)
+	}
 }
 
 // ヘルスチェックと同時に制御情報を受信
