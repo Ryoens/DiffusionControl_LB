@@ -3,16 +3,25 @@ package main
 import(
 	"fmt"
 	"log"
-	"math/rand"
 	"time"
+	"net"
+	"context"
+	"math/rand"
 	// "net/url"
 	"net/http"
 	// "net/http/httputil"
+	"google.golang.org/grpc"
+
+	pb "custome_weightedRR/api"
 )
 
 type Server struct {
 	IP	string 
 	Weight	int
+}
+
+type server struct {
+	pb.UnimplementedLoadBalancerServer
 }
 
 var (
@@ -27,10 +36,13 @@ var (
 const (
 	// 固定値の定義
 	tcp_port string = ":8001"
+	sleep_time int = 1
 )
 
 func main(){
 	// http.HandleFunc("/", lbHandler)
+	go gRPC_Server()
+
 	s := http.Server{
 		Addr:	tcp_port,
 		Handler: http.HandlerFunc(lbHandler),
@@ -88,6 +100,53 @@ func WeightedRoundRobin() Server {
 
 	// ここには到達しないはずだが、デフォルトで最初のサーバーを返す
 	return proxyIPs[0]
+}
+
+// gRPCサーバ
+func gRPC_Server() {
+	lis, err := net.Listen("tcp", ":50051")
+	if err != nil {
+		log.Fatalf("Failed to listen: %v", err)
+	}
+	s := grpc.NewServer()
+	pb.RegisterLoadBalancerServer(s, &server{})
+	log.Printf("gRPC Server listening at %v", lis.Addr())
+	if err := s.Serve(lis); err != nil {
+		log.Fatalf("Failed to serve: %v", err)
+	}
+}
+
+// 隣接LBへのヘルスチェック
+func (s *server) GetBackendStatus(ctx context.Context, req *pb.BackendRequest) (*pb.BackendStatus, error) {
+	fmt.Printf("Received health check request for server: %s\n", req.ServerName)
+	return &pb.BackendStatus{IsHealthy: true}, nil
+}
+
+// 隣接LBへの制御情報の送信
+func (s *server) ControlStream(stream pb.LoadBalancer_ControlStreamServer) error {
+	rand.Seed(time.Now().UnixNano()) // ランダムシードを設定
+
+	for {
+		in, err := stream.Recv()
+		if err != nil {
+			log.Printf("Error receiving control message: %v", err)
+			return err
+		}
+		// 制御情報をランダムな整数として生成
+		randomControlValue := rand.Intn(100) // 0〜99のランダム整数
+		log.Printf("Received control command: %s, sending random value: %d", in.Command, randomControlValue)
+
+		// ランダムな制御情報をクライアントに送信
+		if err := stream.Send(&pb.ControlResponse{Status: "ok", Info: fmt.Sprintf("Random value: %d", randomControlValue)}); err != nil {
+			log.Printf("Error sending response: %v", err)
+			return err
+		}
+	}
+}
+
+// gRPCクライアント
+func client() {
+
 }
 
 // ヘルスチェックと同時に制御情報を受信

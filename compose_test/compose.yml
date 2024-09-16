@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+    LB:
+        image : lb
+        container_name : 'Cluster@num@_LB'
+        ports :
+            - :8080
+        networks :
+            gushing-ecstasy :
+            cluster@num@-local-net :
+                ipv4_address : 10.0.@num+1@.2
+        tty : true
+
+    web0:
+        image : nginx
+        container_name : 'Cluster@num@_web0'
+        environment:
+            - TZ=Asia/Tokyo
+            - BUNDLE_APP_CONFIG=/app/.bundle
+        depends_on : 
+            - LB
+        ports :
+            - :8081
+        networks :
+            cluster@num@-local-net :
+                ipv4_address : 10.0.@num+1@.10
+        tty : true
+
+    web1:
+        image : nginx
+        container_name : 'Cluster@num@_web1'
+        environment:
+            - TZ=Asia/Tokyo
+            - BUNDLE_APP_CONFIG=/app/.bundle
+        depends_on : 
+            - LB
+        ports :
+            - :8082
+        networks :
+            cluster@num@-local-net :
+                ipv4_address : 10.0.@num+1@.11
+        tty : true
+
+    web2:
+        image : nginx
+        container_name : 'Cluster@num@_web2'
+        environment:
+            - TZ=Asia/Tokyo
+            - BUNDLE_APP_CONFIG=/app/.bundle
+        depends_on : 
+            - LB
+        ports :
+            - :8083
+        networks :
+            cluster@num@-local-net :
+                ipv4_address : 10.0.@num+1@.12
+        tty : true
+
+networks :
+    gushing-ecstasy :
+        external : true
+    cluster@num@-local-net :
+        name : cluster@num@-local-net
+        driver : bridge
+        ipam :
+            driver : default
+            config :
+                - subnet : 10.0.@num+1@.0/24
+
