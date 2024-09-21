@@ -23,7 +23,7 @@ do
 	cd ../
 	rm -rf ./cluster$KEY
 
-	# sudo docker exec Cluster$((KEY))_LB rm -rf compose_test/
+	# sudo docker exec Cluster$((KEY))_LB rm -rf cmd/ // コンテナ内でcmd/を消したい
 
 	KEY=`expr $KEY + 1`
 done
