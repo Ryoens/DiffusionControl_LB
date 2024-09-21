@@ -3,11 +3,6 @@
 KEY=0
 QTY_CLUSTER=$(($1))
 
-docker image build ./ -t lb:latest
-
-docker network rm gushing-ecstasy
-docker network create gushing-ecstasy --driver=bridge --subnet=114.51.4.0/24
-
 echo $QTY_CLUSTER
 
 while [ $KEY -le $QTY_CLUSTER ]
@@ -17,10 +12,9 @@ do
 	sudo sed -e "s/@num@/$((KEY))/g" -e "s/@num+1@/$((KEY+1))/g" ./docker-compose.yml > ./cluster$KEY/docker-compose.yml
 
 	cd ./cluster$KEY
-	docker compose up -d
+	docker compose down
 	cd ../
 	rm -rf ./cluster$KEY
 
 	KEY=`expr $KEY + 1`
 done
-
