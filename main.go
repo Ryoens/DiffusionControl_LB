@@ -1,11 +1,14 @@
 package main
 
 import(
+	// "os"
 	"fmt"
 	"log"
 	"time"
 	"net"
 	"context"
+	// "io/ioutil"
+	// "encoding/json"
 	"math/rand"
 	// "net/url"
 	"net/http"
@@ -27,9 +30,9 @@ type server struct {
 var (
 	// グローバル変数の定義
 	proxyIPs = []Server{
-		{"172.30.0.11", 0},
-		{"172.30.0.12", 0}, 
-		{"172.30.0.13", 0},
+		{"10.0.1.10", 0},
+		{"10.0.1.11", 0}, 
+		{"10.0.1.12", 0},
 	}
 )
 
@@ -40,6 +43,21 @@ const (
 	grpc_src string = "localhost:50052" // gRPCサーバで使用
 	sleep_time int = 1
 )
+
+// func init(){
+// 	// JSONファイルを開く
+// 	file, err := os.Open("./json/config.json")
+// 	if err != nil {
+// 		log.Fatalf("Failed to open file: %v", err)
+// 	}
+// 	defer file.Close()
+
+// 	// JSONファイルの内容を読み込む
+// 	value, err := ioutil.ReadAll(file)
+// 	if err != nil {
+// 		log.Fatalf("Failed to read file: %v", err)
+// 	}
+// }
 
 func main(){
 	// http.HandleFunc("/", lbHandler)
@@ -73,12 +91,13 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 	randomIndex := WeightedRoundRobin()
 	fmt.Println("Selected IP:", randomIndex)
 	fmt.Printf("---\n")
+
 	// proxyURL := &url.URL {
 	// 	Scheme: "http",
 	// 	Host: proxyIPs[randomIndex] + tcp_port,
 	// }
 
-	// make reverse proxy
+	// // make reverse proxy
 	// proxy := httputil.NewSingleHostReverseProxy(proxyURL)
 	// proxy.ServeHTTP(w, r)
 }
