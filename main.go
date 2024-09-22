@@ -10,6 +10,7 @@ import(
 	"sync"
 	"context"
 	"strings"
+	"strconv"
 	"io/ioutil"
 	"encoding/json"
 	"math/rand"
@@ -45,6 +46,8 @@ var (
 		{"", 0},
 	}
 	clusterLBs []string // 隣接リスト
+	my_clusterLB string
+	data []int
 )
 
 const (
@@ -99,8 +102,10 @@ func init(){
 			proxyIPs[0].IP = cluster.Web0
 			proxyIPs[1].IP = cluster.Web1
 			proxyIPs[2].IP = cluster.Web2
+			my_clusterLB = cluster.Cluster_LB
 		} 
 	}
+	data = make([]int, len(clusterLBs))
 }
 
 func main(){
@@ -109,9 +114,9 @@ func main(){
 	wg.Add(1)
 	go gRPC_Server(&wg)
 
-	for _, address := range clusterLBs {
+	for i, address := range clusterLBs {
 		wg.Add(1)
-		go gRPC_Client(address, &wg)
+		go gRPC_Client(address, i, &wg)
 	}
 	
 	// 後で関数化するかも
@@ -216,7 +221,7 @@ func (s *server) ControlStream(stream pb.LoadBalancer_ControlStreamServer) error
 		log.Printf("Received control command: %s, sending random value: %d", in.Command, randomControlValue)
 
 		// ランダムな制御情報をクライアントに送信
-		if err := stream.Send(&pb.ControlResponse{Status: "ok", Info: fmt.Sprintf("Random value: %d", randomControlValue)}); err != nil {
+		if err := stream.Send(&pb.ControlResponse{Status: "ok", Info: fmt.Sprintf("%d", randomControlValue)}); err != nil {
 			log.Printf("Error sending response: %v", err)
 			return err
 		}
@@ -224,7 +229,7 @@ func (s *server) ControlStream(stream pb.LoadBalancer_ControlStreamServer) error
 }
 
 // gRPCクライアント
-func gRPC_Client(address string, wg *sync.WaitGroup) {
+func gRPC_Client(address string, i int, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	adjacent_lb := address + grpc_dest
@@ -248,7 +253,7 @@ func gRPC_Client(address string, wg *sync.WaitGroup) {
 	ticker := time.NewTicker(time.Duration(sleep_time) * time.Second)
 	for range ticker.C {
 		// ヘルスチェック
-		req := &pb.BackendRequest{ServerName: "backend-1"}
+		req := &pb.BackendRequest{ServerName: adjacent_lb} // 本当は宛先サーバにしたい
 		res, err := client.GetBackendStatus(context.Background(), req)
 		if err != nil {
 			log.Printf("Could not get backend status: %v", err)
@@ -267,6 +272,11 @@ func gRPC_Client(address string, wg *sync.WaitGroup) {
 			log.Fatalf("Error receiving control response: %v", err)
 		}
 		log.Printf("Received control response: %s", in.Info)
+		
+		data[i], err = strconv.Atoi(in.Info)
+		if err != nil {
+			log.Fatalf("Failed to convert control response to int: %v", err)
+		}
 	}
 }
 
