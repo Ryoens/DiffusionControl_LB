@@ -29,7 +29,7 @@ var (
 		{"", 0},
 		{"", 0},
 	}
-	clusterLBs []string
+	clusterLBs []string // 隣接リスト
 )
 // var clusters map[string]Cluster
 
@@ -77,10 +77,11 @@ func init(){
 
 	// 各クラスタのLBのIPアドレスと照合
 	for clusterName, cluster := range clusters {
-		// 各クラスタLBのIPアドレスをリストに追加
-		clusterLBs = append(clusterLBs, cluster.Cluster_LB)
-
-		if clusterLB == cluster.Cluster_LB {
+		
+		if clusterLB != cluster.Cluster_LB {
+			// 各クラスタLBのIPアドレスをリストに追加
+			clusterLBs = append(clusterLBs, cluster.Cluster_LB)
+		} else {
 			// proxyIPsにサーバ情報を設定
 			proxyIPs[0].IP = cluster.Web0
 			proxyIPs[1].IP = cluster.Web1
@@ -91,7 +92,7 @@ func init(){
 			fmt.Printf("  Web0: %s\n", proxyIPs[0].IP)
 			fmt.Printf("  Web1: %s\n", proxyIPs[1].IP)
 			fmt.Printf("  Web2: %s\n", proxyIPs[2].IP)
-		}
+		} 
 	}
 }
 
@@ -100,4 +101,5 @@ func main() {
 	for _, lb := range clusterLBs {
 		fmt.Printf("LB IP: %s\n", lb)
 	}
+	fmt.Println(clusterLBs)
 }

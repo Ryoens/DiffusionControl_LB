@@ -3,12 +3,9 @@ version: '3.8'
 services:
     LB:
         image : lb
-        # build: 
-        #     context: ../
-        #     dockerfile: compose_test/Dockerfile
         container_name : 'Cluster@num@_LB'
         ports :
-            - :8080
+            - :8001
         # 一時的にvolumeを追加　(後でDockerfileに定義)
         volumes:
             - /home/enk/docker/master/go_lb:/home/ubuntu
@@ -27,7 +24,7 @@ services:
         depends_on : 
             - LB
         ports :
-            - :8081
+            - :8001
         networks :
             cluster@num@-local-net :
                 ipv4_address : 10.0.@num+1@.10
@@ -42,7 +39,7 @@ services:
         depends_on : 
             - LB
         ports :
-            - :8082
+            - :8001
         networks :
             cluster@num@-local-net :
                 ipv4_address : 10.0.@num+1@.11
@@ -57,7 +54,7 @@ services:
         depends_on : 
             - LB
         ports :
-            - :8083
+            - :8001
         networks :
             cluster@num@-local-net :
                 ipv4_address : 10.0.@num+1@.12

@@ -1,18 +1,20 @@
 package main
 
 import(
-	// "os"
+	"os"
+	"os/exec"
 	"fmt"
 	"log"
 	"time"
 	"net"
 	"context"
-	// "io/ioutil"
-	// "encoding/json"
+	"strings"
+	"io/ioutil"
+	"encoding/json"
 	"math/rand"
-	// "net/url"
+	"net/url"
 	"net/http"
-	// "net/http/httputil"
+	"net/http/httputil"
 	"google.golang.org/grpc"
 
 	pb "custome_weightedRR/api"
@@ -23,41 +25,83 @@ type Server struct {
 	Weight	int
 }
 
+type Cluster struct {
+	Cluster_LB string `json:"cluster_lb"`
+	Web0      string `json:"web0"`
+	Web1      string `json:"web1"`
+	Web2      string `json:"web2"`
+}
+
 type server struct {
 	pb.UnimplementedLoadBalancerServer
 }
 
+// グローバル変数の定義
 var (
-	// グローバル変数の定義
 	proxyIPs = []Server{
-		{"10.0.1.10", 0},
-		{"10.0.1.11", 0}, 
-		{"10.0.1.12", 0},
+		{"", 0}, 
+		{"", 0},
+		{"", 0},
 	}
+	clusterLBs []string // 隣接リスト
 )
 
 const (
 	// 固定値の定義
 	tcp_port string = ":8001"
+	dst_port string = ":80" // webサーバ用
 	grpc_dest string = ":50051" // gRPCクライアントで使用
 	grpc_src string = "localhost:50052" // gRPCサーバで使用
 	sleep_time int = 1
 )
 
-// func init(){
-// 	// JSONファイルを開く
-// 	file, err := os.Open("./json/config.json")
-// 	if err != nil {
-// 		log.Fatalf("Failed to open file: %v", err)
-// 	}
-// 	defer file.Close()
+func init(){
+	// JSONファイルを開く
+	file, err := os.Open("./json/config.json")
+	if err != nil {
+		log.Fatalf("Failed to open file: %v", err)
+	}
+	defer file.Close()
 
-// 	// JSONファイルの内容を読み込む
-// 	value, err := ioutil.ReadAll(file)
-// 	if err != nil {
-// 		log.Fatalf("Failed to read file: %v", err)
-// 	}
-// }
+	// JSONファイルの内容を読み込む
+	value, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("Failed to read file: %v", err)
+	}
+
+	var clusters map[string]Cluster
+	err = json.Unmarshal(value, &clusters)
+	if err != nil {
+		log.Fatalf("Failed to unmarshal JSON: %v", err)
+	}
+
+	// hostname -i を実行
+	cmd := exec.Command("hostname", "-i")
+	output, err := cmd.Output()
+	if err != nil {
+		fmt.Printf("Error executing command: %v\n", err)
+		return
+	}
+
+	// 出力結果をスペースで分割し、配列に代入
+	ip_addresses := strings.Fields(string(output))
+
+	// 自身のCluster_LBのIPアドレスを抽出
+	clusterLB := ip_addresses[1] // 最初のIPアドレスを取得
+	
+	// 各クラスタのLBのIPアドレスと照合
+	for _, cluster := range clusters {
+		if clusterLB != cluster.Cluster_LB {
+			// 各クラスタLBのIPアドレスをリストに追加
+			clusterLBs = append(clusterLBs, cluster.Cluster_LB)
+		} else {
+			// proxyIPsにサーバ情報を設定
+			proxyIPs[0].IP = cluster.Web0
+			proxyIPs[1].IP = cluster.Web1
+			proxyIPs[2].IP = cluster.Web2
+		} 
+	}
+}
 
 func main(){
 	// http.HandleFunc("/", lbHandler)
@@ -92,14 +136,16 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("Selected IP:", randomIndex)
 	fmt.Printf("---\n")
 
-	// proxyURL := &url.URL {
-	// 	Scheme: "http",
-	// 	Host: proxyIPs[randomIndex] + tcp_port,
-	// }
+	proxyURL := &url.URL {
+		Scheme: "http",
+		Host: randomIndex.IP + dst_port,
+	}
 
-	// // make reverse proxy
-	// proxy := httputil.NewSingleHostReverseProxy(proxyURL)
-	// proxy.ServeHTTP(w, r)
+	fmt.Println(proxyURL)
+
+	// make reverse proxy
+	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
+	proxy.ServeHTTP(w, r)
 }
 
 func WeightedRoundRobin() Server {
