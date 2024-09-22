@@ -7,6 +7,7 @@ import(
 	"log"
 	"time"
 	"net"
+	"sync"
 	"context"
 	"strings"
 	"io/ioutil"
@@ -50,8 +51,7 @@ const (
 	// 固定値の定義
 	tcp_port string = ":8001"
 	dst_port string = ":80" // webサーバ用
-	grpc_dest string = ":50051" // gRPCクライアントで使用
-	grpc_src string = "localhost:50052" // gRPCサーバで使用
+	grpc_dest string = ":50051" // gRPCで使用
 	sleep_time int = 1
 )
 
@@ -104,10 +104,17 @@ func init(){
 }
 
 func main(){
-	// http.HandleFunc("/", lbHandler)
-	go gRPC_Server()
-	go gRPC_Client()
+	var wg sync.WaitGroup
 
+	wg.Add(1)
+	go gRPC_Server(&wg)
+
+	for _, address := range clusterLBs {
+		wg.Add(1)
+		go gRPC_Client(address, &wg)
+	}
+	
+	// 後で関数化するかも
 	s := http.Server{
 		Addr:	tcp_port,
 		Handler: http.HandlerFunc(lbHandler),
@@ -117,6 +124,8 @@ func main(){
 	if err := s.ListenAndServe(); err != nil {
 		log.Fatal(err.Error())
 	}
+
+	wg.Wait()
 }
 
 // リクエストをweighted RRで処理
@@ -171,7 +180,9 @@ func WeightedRoundRobin() Server {
 }
 
 // gRPCサーバ
-func gRPC_Server() {
+func gRPC_Server(wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	lis, err := net.Listen("tcp", grpc_dest)
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
@@ -213,9 +224,13 @@ func (s *server) ControlStream(stream pb.LoadBalancer_ControlStreamServer) error
 }
 
 // gRPCクライアント
-func gRPC_Client() {
+func gRPC_Client(address string, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	adjacent_lb := address + grpc_dest
+
 	// サーバとのコネクションを確立
-	conn, err := grpc.Dial(grpc_src, grpc.WithInsecure(), grpc.WithBlock())
+	conn, err := grpc.Dial(adjacent_lb, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		log.Fatalf("No connect: %v", err)
 	}
@@ -253,11 +268,6 @@ func gRPC_Client() {
 		}
 		log.Printf("Received control response: %s", in.Info)
 	}
-}
-
-// ヘルスチェックと同時に制御情報を受信
-func GetFeedback() {
-
 }
 
 // 転送するリクエスト数の計算(重み)
