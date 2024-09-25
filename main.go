@@ -13,6 +13,7 @@ import(
 	"strconv"
 	"io/ioutil"
 	"encoding/json"
+	"math"
 	"math/rand"
 	"net/url"
 	"net/http"
@@ -25,6 +26,7 @@ import(
 type Server struct {
 	IP	string 
 	Weight	int
+	// 追加で各webサーバが持つセッション数を入れるかも
 }
 
 type Cluster struct {
@@ -45,9 +47,12 @@ var (
 		{"", 0},
 		{"", 0},
 	}
+	randomIndex Server
 	clusterLBs []string // 隣接リスト
 	my_clusterLB string
 	data []int
+	queue int // 処理待ちTCPセッション数
+	weight int 
 )
 
 const (
@@ -56,6 +61,8 @@ const (
 	dst_port string = ":80" // webサーバ用
 	grpc_dest string = ":50051" // gRPCで使用
 	sleep_time int = 1
+	threshold int = 700
+	kappa float64 = 0.07
 )
 
 func init(){
@@ -136,19 +143,24 @@ func main(){
 // リクエストをweighted RRで処理
 func lbHandler(w http.ResponseWriter, r *http.Request) {
 	// ランダムシードを設定
-	rand.Seed(time.Now().UnixNano())
+	queue++ // 処理待ちセッション数をインクリメント
 
-	for i := range proxyIPs{
-		proxyIPs[i].Weight = rand.Intn(10)+1
+	if queue > threshold {
+		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
+	} else {
+		rand.Seed(time.Now().UnixNano())
+		for i := range proxyIPs{
+			proxyIPs[i].Weight = rand.Intn(10)+1
+		}
+
+		for _, server := range proxyIPs {
+			fmt.Printf("IP: %s, Weight: %d\n", server.IP, server.Weight)
+		}
+
+		randomIndex = WeightedRoundRobin()
+		fmt.Println("Selected IP:", randomIndex)
+		fmt.Printf("---\n")
 	}
-
-	for _, server := range proxyIPs {
-		fmt.Printf("IP: %s, Weight: %d\n", server.IP, server.Weight)
-	}
-
-	randomIndex := WeightedRoundRobin()
-	fmt.Println("Selected IP:", randomIndex)
-	fmt.Printf("---\n")
 
 	proxyURL := &url.URL {
 		Scheme: "http",
@@ -277,10 +289,17 @@ func gRPC_Client(address string, i int, wg *sync.WaitGroup) {
 		if err != nil {
 			log.Fatalf("Failed to convert control response to int: %v", err)
 		}
+
+		fmt.Println(data)
+		Calculate(data[i]) 
 	}
 }
 
+// 隣接LBのフィードバック情報を取得するたびに本関数を呼び出し
 // 転送するリクエスト数の計算(重み)
-func Calculate() {
-	
+func Calculate(next_queue int) {
+	// DC方式で計算
+	diff := queue - next_queue
+	weight = int(math.Round(kappa * float64(diff)))
+	// weight = int(math.Round(weight))
 }
