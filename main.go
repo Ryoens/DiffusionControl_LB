@@ -39,6 +39,11 @@ type Cluster struct {
 	Web2      string `json:"web2"`
 }
 
+type LoadBalancer struct {
+	Address string
+	IsHealthy bool
+}
+
 type server struct {
 	pb.UnimplementedLoadBalancerServer
 }
@@ -50,8 +55,10 @@ var (
 		{"", 0},
 		{"", 0},
 	}
+
+	clusterLBs []LoadBalancer// 隣接リスト
+
 	randomIndex Server
-	clusterLBs []string // 隣接リスト
 	my_clusterLB string
 	data []int
 	queue int // 処理待ちTCPセッション数
@@ -107,7 +114,10 @@ func init(){
 	for _, cluster := range clusters {
 		if clusterLB != cluster.Cluster_LB {
 			// 各クラスタLBのIPアドレスをリストに追加
-			clusterLBs = append(clusterLBs, cluster.Cluster_LB)
+			clusterLBs = append(clusterLBs, LoadBalancer{
+				Address: cluster.Cluster_LB, 
+				IsHealthy: false,
+			})
 		} else {
 			// proxyIPsにサーバ情報を設定
 			proxyIPs[0].IP = cluster.Web0
@@ -268,8 +278,8 @@ func healthCheck(client pb.LoadBalancerClient, adjacent_lb string) bool {
 func gRPC_Client() {
 	defer wg.Done()
 
-	for i, adjacent_lb := range clusterLBs {
-		adjacent_lb = adjacent_lb + grpc_dest
+	for i, address := range clusterLBs {
+		adjacent_lb := address.Address + grpc_dest
 		// ヘルスチェック
 		conn, err := grpc.Dial(adjacent_lb, grpc.WithInsecure(), grpc.WithBlock())
 		if err != nil {
@@ -281,9 +291,11 @@ func gRPC_Client() {
 		client := pb.NewLoadBalancerClient(conn)
 
 		if healthCheck(client, adjacent_lb) {
+			clusterLBs[i].IsHealthy = true
 			wg.Add(1)
 			go handleControlStream(client, adjacent_lb, i)
 		} else {
+			clusterLBs[i].IsHealthy = false
 			log.Printf("Load Balancer at %s is down", adjacent_lb)
 		}
 		// time.Sleep(time.Duration(sleep_time) * time.Second)
@@ -309,6 +321,7 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 		// 制御情報の送信
 		if err := stream.Send(&pb.ControlMessage{Command: "update_policy", Payload: "new_policy_data"}); err != nil {
 			log.Printf("Error sending control message: %v", err)
+			clusterLBs[num].IsHealthy = false
 
 			if status.Code(err) == codes.Canceled || status.Code(err) == codes.Unavailable {
 				log.Printf("Send Connection to %s was lost, reconnecting...", address)
@@ -321,6 +334,7 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 		in, err := stream.Recv()
 		if err != nil {
 			log.Printf("Error receiving control response: %v", err)
+			clusterLBs[num].IsHealthy = false
 
 			if status.Code(err) == codes.Canceled || status.Code(err) == codes.Unavailable {
 				log.Printf("Receive Connection to %s was lost, reconnecting...", address)
@@ -335,7 +349,7 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 			log.Fatalf("Failed to convert control response to int: %v", err)
 		}
 
-		fmt.Println(data)
+		fmt.Println(data, clusterLBs)
 		Calculate(data[num]) 
 	}
 }
