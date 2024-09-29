@@ -3,6 +3,7 @@ package main
 import(
 	"os"
 	"os/exec"
+	"io"
 	"fmt"
 	"log"
 	"time"
@@ -55,6 +56,7 @@ var (
 	data []int
 	queue int // 処理待ちTCPセッション数
 	weight int 
+	wg sync.WaitGroup
 )
 
 const (
@@ -122,13 +124,11 @@ func init(){
 }
 
 func main(){
-	var wg sync.WaitGroup
+	wg.Add(1)
+	go gRPC_Server()
 
 	wg.Add(1)
-	go gRPC_Server(&wg)
-
-	wg.Add(1)
-	go gRPC_Client(&wg)
+	go gRPC_Client()
 	
 	// 後で関数化するかも
 	s := http.Server{
@@ -202,7 +202,7 @@ func WeightedRoundRobin() Server {
 }
 
 // gRPCサーバ
-func gRPC_Server(wg *sync.WaitGroup) {
+func gRPC_Server() {
 	defer wg.Done()
 
 	lis, err := net.Listen("tcp", grpc_dest)
@@ -229,10 +229,14 @@ func (s *server) ControlStream(stream pb.LoadBalancer_ControlStreamServer) error
 
 	for {
 		in, err := stream.Recv()
+		if err == io.EOF {
+			return nil
+		}
 		if err != nil {
 			log.Printf("Error receiving control message: %v", err)
 			return err
 		}
+
 		// 制御情報をランダムな整数として生成
 		randomControlValue := rand.Intn(100) // 0〜99のランダム整数
 		log.Printf("Received control command: %s, sending random value: %d", in.Command, randomControlValue)
@@ -261,7 +265,7 @@ func healthCheck(client pb.LoadBalancerClient, adjacent_lb string) bool {
 }
 
 // gRPCクライアント(変更後)
-func gRPC_Client(wg *sync.WaitGroup) {
+func gRPC_Client() {
 	defer wg.Done()
 
 	for i, adjacent_lb := range clusterLBs {
@@ -277,21 +281,18 @@ func gRPC_Client(wg *sync.WaitGroup) {
 		client := pb.NewLoadBalancerClient(conn)
 
 		if healthCheck(client, adjacent_lb) {
-			fmt.Println("gogogogo")
 			wg.Add(1)
-			go handleControlStream(wg, client, adjacent_lb, i)
+			go handleControlStream(client, adjacent_lb, i)
 		} else {
 			log.Printf("Load Balancer at %s is down", adjacent_lb)
 		}
-		time.Sleep(time.Duration(sleep_time) * time.Second)
+		// time.Sleep(time.Duration(sleep_time) * time.Second)
 	}
 	wg.Wait()
 }
 
-func handleControlStream(wg *sync.WaitGroup, client pb.LoadBalancerClient, address string, num int) {
+func handleControlStream(client pb.LoadBalancerClient, address string, num int) {
 	defer wg.Done()
-
-	fmt.Println("connection", client)
 
 	// 双方向ストリーミングの制御情報送受信
 	stream, err := client.ControlStream(context.Background())
@@ -299,6 +300,8 @@ func handleControlStream(wg *sync.WaitGroup, client pb.LoadBalancerClient, addre
 		log.Fatalf("Error creating stream: %v", err)
 		return
 	}
+
+	fmt.Println("receive phase") // 切断後に制御情報を受信できない問題に関するデバック
 
 	// 定期的にヘルスチェックと制御情報を送受信
 	ticker := time.NewTicker(time.Duration(sleep_time) * time.Second)
@@ -327,7 +330,6 @@ func handleControlStream(wg *sync.WaitGroup, client pb.LoadBalancerClient, addre
 		}
 		log.Printf("Received control response: %s", in.Info)
 		
-		fmt.Println("convert")
 		data[num], err = strconv.Atoi(in.Info)
 		if err != nil {
 			log.Fatalf("Failed to convert control response to int: %v", err)
