@@ -19,6 +19,8 @@ import(
 	"net/http"
 	"net/http/httputil"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/codes"
 
 	pb "custome_weightedRR/api"
 )
@@ -125,16 +127,8 @@ func main(){
 	wg.Add(1)
 	go gRPC_Server(&wg)
 
-	// ---
-	// waitgroupを利用し、複数のサーバに接続するたびにプロセスを生成
-	// for i, address := range clusterLBs {
-	// 	wg.Add(1)
-	// 	go gRPC_Client(address, i, &wg)
-	// }
-	// ---
-
 	wg.Add(1)
-	go gRPC_Client_Sub(&wg)
+	go gRPC_Client(&wg)
 	
 	// 後で関数化するかも
 	s := http.Server{
@@ -251,61 +245,6 @@ func (s *server) ControlStream(stream pb.LoadBalancer_ControlStreamServer) error
 	}
 }
 
-// gRPCクライアント(変更前)
-func gRPC_Client(address string, i int, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	adjacent_lb := address + grpc_dest
-
-	// サーバとのコネクションを確立
-	conn, err := grpc.Dial(adjacent_lb, grpc.WithInsecure(), grpc.WithBlock())
-	if err != nil {
-		log.Fatalf("No connect: %v", err)
-	}
-	defer conn.Close()
-
-	client := pb.NewLoadBalancerClient(conn)
-
-	// 双方向ストリーミングの制御情報送受信
-	stream, err := client.ControlStream(context.Background())
-	if err != nil {
-		log.Fatalf("Error creating stream: %v", err)
-	}
-
-	// 定期的にヘルスチェックと制御情報を送受信
-	ticker := time.NewTicker(time.Duration(sleep_time) * time.Second)
-	for range ticker.C {
-		// ヘルスチェック
-		req := &pb.BackendRequest{ServerName: adjacent_lb} // 本当は宛先サーバにしたい
-		res, err := client.GetBackendStatus(context.Background(), req)
-		if err != nil {
-			log.Printf("Could not get backend status: %v", err)
-		} else {
-			log.Printf("Backend is healthy: %v", res.IsHealthy)
-		}
-
-		// 制御情報の送信
-		if err := stream.Send(&pb.ControlMessage{Command: "update_policy", Payload: "new_policy_data"}); err != nil {
-			log.Fatalf("Error sending control message: %v", err)
-		}
-
-		// 制御情報の応答受信
-		in, err := stream.Recv()
-		if err != nil {
-			log.Fatalf("Error receiving control response: %v", err)
-		}
-		log.Printf("Received control response: %s", in.Info)
-		
-		data[i], err = strconv.Atoi(in.Info)
-		if err != nil {
-			log.Fatalf("Failed to convert control response to int: %v", err)
-		}
-
-		fmt.Println(data)
-		Calculate(data[i]) 
-	}
-}
-
 func healthCheck(client pb.LoadBalancerClient, adjacent_lb string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(sleep_time)*time.Second)
 	defer cancel()
@@ -322,7 +261,7 @@ func healthCheck(client pb.LoadBalancerClient, adjacent_lb string) bool {
 }
 
 // gRPCクライアント(変更後)
-func gRPC_Client_Sub(wg *sync.WaitGroup) {
+func gRPC_Client(wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for i, adjacent_lb := range clusterLBs {
@@ -366,13 +305,25 @@ func handleControlStream(wg *sync.WaitGroup, client pb.LoadBalancerClient, addre
 	for range ticker.C {
 		// 制御情報の送信
 		if err := stream.Send(&pb.ControlMessage{Command: "update_policy", Payload: "new_policy_data"}); err != nil {
-			log.Fatalf("Error sending control message: %v", err)
+			log.Printf("Error sending control message: %v", err)
+
+			if status.Code(err) == codes.Canceled || status.Code(err) == codes.Unavailable {
+				log.Printf("Send Connection to %s was lost, reconnecting...", address)
+				return
+			}
+			return
 		}
 
 		// 制御情報の応答受信
 		in, err := stream.Recv()
 		if err != nil {
-			log.Fatalf("Error receiving control response: %v", err)
+			log.Printf("Error receiving control response: %v", err)
+
+			if status.Code(err) == codes.Canceled || status.Code(err) == codes.Unavailable {
+				log.Printf("Receive Connection to %s was lost, reconnecting...", address)
+				return
+			}
+			return
 		}
 		log.Printf("Received control response: %s", in.Info)
 		
