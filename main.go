@@ -160,7 +160,7 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 
 	if queue > threshold {
 		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
-		
+		randomIndex = WeightedRoundRobin_AdjacentLB()
 	} else {
 		// ランダムシードを設定
 		rand.Seed(time.Now().UnixNano())
@@ -168,14 +168,12 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 			proxyIPs[i].Weight = rand.Intn(10)+1
 		}
 
-		for _, server := range proxyIPs {
-			fmt.Printf("IP: %s, Weight: %d\n", server.IP, server.Weight)
-		}
-
-		randomIndex = WeightedRoundRobin()
-		fmt.Println("Selected IP:", randomIndex)
-		fmt.Printf("---\n")
+		randomIndex = WeightedRoundRobin_Backend()
 	}
+
+	// デバック用(選択されたIPアドレスの確認)
+	fmt.Println("Selected IP:", randomIndex)
+	fmt.Printf("---\n")
 
 	proxyURL := &url.URL {
 		Scheme: "http",
@@ -196,8 +194,35 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 	proxy.ModifyResponse = modifier
 }
 
-// 重みづけラウンドロビン(バックエンドサーバへの振り分け) -> 後で通常のラウンドロビンに変更するかも
-func WeightedRoundRobin() Server {
+// クラスタ間の重みづけラウンドロビン(隣接LBへの振り分け)
+func WeightedRoundRobin_AdjacentLB() Server {
+	// 重みは設定されている状態 (乱数はいらない)
+	totalWeight := 0
+	for _, server := range clusterLBs {
+		totalWeight += server.weight
+	}
+
+	// 0からtotalWeight-1までの乱数を生成
+	randomWeight := rand.Intn(totalWeight)
+
+	fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
+	// 重みでサーバーを選択
+	for _, server := range clusterLBs {
+		if randomWeight < server.weight {
+			return Server{
+				IP: server.Address,
+				Weight: server.weight,
+			}
+		}
+		randomWeight -= server.weight
+	}
+
+	// ここには到達しないはずだが、デフォルトで最初のサーバーを返す
+	return proxyIPs[0]
+}
+
+// クラスタ内でのラウンドロビン(バックエンドサーバへの振り分け)
+func WeightedRoundRobin_Backend() Server {
 	totalWeight := 0
 	for _, server := range proxyIPs {
 		totalWeight += server.Weight
