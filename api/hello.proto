@@ -25,11 +25,11 @@ message BackendStatus {
 // 制御メッセージ（クライアント -> サーバー）
 message ControlMessage {
   string command = 1;  // 実行するコマンド
-  string payload = 2;  // コマンドに関連するデータ
+  int64 payload = 2;  // コマンドに関連するデータ
 }
 
 // 制御レスポンスメッセージ（サーバー -> クライアント）
 message ControlResponse {
   string status = 1;  // 実行ステータス
-  string info = 2;    // 詳細情報
+  int64 payload = 2;    // 詳細情報
 }

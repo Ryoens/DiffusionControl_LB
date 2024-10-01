@@ -11,7 +11,6 @@ import(
 	"sync"
 	"context"
 	"strings"
-	"strconv"
 	"io/ioutil"
 	"encoding/json"
 	"math"
@@ -42,6 +41,8 @@ type Cluster struct {
 type LoadBalancer struct {
 	Address string
 	IsHealthy bool
+	data int
+	weight int
 }
 
 type server struct {
@@ -60,9 +61,7 @@ var (
 
 	randomIndex Server
 	my_clusterLB string
-	data []int
-	queue int // 処理待ちTCPセッション数
-	weight int 
+	queue int // 処理待ちTCPセッション数 
 	wg sync.WaitGroup
 )
 
@@ -117,6 +116,8 @@ func init(){
 			clusterLBs = append(clusterLBs, LoadBalancer{
 				Address: cluster.Cluster_LB, 
 				IsHealthy: false,
+				data: 0, 
+				weight: 0,
 			})
 		} else {
 			// proxyIPsにサーバ情報を設定
@@ -126,7 +127,6 @@ func init(){
 			my_clusterLB = cluster.Cluster_LB
 		} 
 	}
-	data = make([]int, len(clusterLBs))
 
 	// デバック用
 	// Cluster2の場合: 10.0.3.10 10.0.3.11 10.0.3.12 114.51.4.4 [114.51.4.2 114.51.4.3]
@@ -243,8 +243,6 @@ func (s *server) GetBackendStatus(ctx context.Context, req *pb.BackendRequest) (
 
 // 隣接LBへの制御情報の送信
 func (s *server) ControlStream(stream pb.LoadBalancer_ControlStreamServer) error {
-	rand.Seed(time.Now().UnixNano()) // ランダムシードを設定
-
 	for {
 		in, err := stream.Recv()
 		if err == io.EOF {
@@ -254,13 +252,10 @@ func (s *server) ControlStream(stream pb.LoadBalancer_ControlStreamServer) error
 			log.Printf("Error receiving control message: %v", err)
 			return err
 		}
+		log.Printf("Received control command: %s, TCP Waiting Sessions: %d", in.Command, queue)
 
-		// 制御情報をランダムな整数として生成
-		randomControlValue := rand.Intn(100) // 0〜99のランダム整数
-		log.Printf("Received control command: %s, sending random value: %d", in.Command, randomControlValue)
-
-		// ランダムな制御情報をクライアントに送信
-		if err := stream.Send(&pb.ControlResponse{Status: "ok", Info: fmt.Sprintf("%d", randomControlValue)}); err != nil {
+		// 現在の制御情報をクライアントに送信
+		if err := stream.Send(&pb.ControlResponse{Status: "ok", Payload: int64(queue)}); err != nil {
 			log.Printf("Error sending response: %v", err)
 			return err
 		}
@@ -327,7 +322,7 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 	ticker := time.NewTicker(time.Duration(sleep_time) * time.Second)
 	for range ticker.C {
 		// 制御情報の送信
-		if err := stream.Send(&pb.ControlMessage{Command: "update_policy", Payload: "new_policy_data"}); err != nil {
+		if err := stream.Send(&pb.ControlMessage{Command: "update_policy", Payload: int64(queue)}); err != nil {
 			log.Printf("Error sending control message: %v", err)
 			clusterLBs[num].IsHealthy = false
 
@@ -350,27 +345,24 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 			}
 			return
 		}
-		log.Printf("Received control response: %s", in.Info)
+		log.Printf("Received control response: %d", in.Payload)
 		
-		data[num], err = strconv.Atoi(in.Info)
-		if err != nil {
-			log.Fatalf("Failed to convert control response to int: %v", err)
-		}
+		clusterLBs[num].data = int(in.Payload)
 
-		fmt.Println(data, clusterLBs)
-		Calculate(data[num]) 
+		fmt.Println(clusterLBs[num].data, clusterLBs)
+		Calculate(clusterLBs[num].data, num) 
 	}
 }
 
 // 隣接LBのフィードバック情報を取得するたびに本関数を呼び出し
 // 転送するリクエスト数の計算(重み)
-func Calculate(next_queue int) {
+func Calculate(next_queue int, num int) {
 	// DC方式で計算
 
 	if queue > next_queue {
 		diff := queue - next_queue
-		weight = int(math.Round(kappa * float64(diff)))
+		clusterLBs[num].weight = int(math.Round(kappa * float64(diff)))
 	} else {
-		weight = 0
+		clusterLBs[num].weight = 0
 	}
 }
