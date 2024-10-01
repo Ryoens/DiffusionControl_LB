@@ -160,6 +160,7 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 
 	if queue > threshold {
 		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
+		
 	} else {
 		// ランダムシードを設定
 		rand.Seed(time.Now().UnixNano())
@@ -183,9 +184,16 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println(proxyURL)
 
+	// レスポンスを書き換える
+	modifier := func(res *http.Response) error {
+		queue--
+		return nil
+	}
+
 	// make reverse proxy
 	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
 	proxy.ServeHTTP(w, r)
+	proxy.ModifyResponse = modifier
 }
 
 // 重みづけラウンドロビン(バックエンドサーバへの振り分け) -> 後で通常のラウンドロビンに変更するかも
@@ -298,6 +306,7 @@ func gRPC_Client() {
 			clusterLBs[i].IsHealthy = false
 			log.Printf("Load Balancer at %s is down", adjacent_lb)
 		}
+		// 複数LBに接続する場合、切り替えに遅延を設定...?
 		// time.Sleep(time.Duration(sleep_time) * time.Second)
 	}
 	wg.Wait()
@@ -306,14 +315,13 @@ func gRPC_Client() {
 func handleControlStream(client pb.LoadBalancerClient, address string, num int) {
 	defer wg.Done()
 
-	// 双方向ストリーミングの制御情報送受信
+	// 双方向ストリーミングの制御情報送受信 (streamを作成)
 	stream, err := client.ControlStream(context.Background())
 	if err != nil {
 		log.Fatalf("Error creating stream: %v", err)
+		// log.Printf("Error creating stream: %v", err)
 		return
 	}
-
-	fmt.Println("receive phase") // 切断後に制御情報を受信できない問題に関するデバック
 
 	// 定期的にヘルスチェックと制御情報を送受信
 	ticker := time.NewTicker(time.Duration(sleep_time) * time.Second)
@@ -358,7 +366,11 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 // 転送するリクエスト数の計算(重み)
 func Calculate(next_queue int) {
 	// DC方式で計算
-	diff := queue - next_queue
-	weight = int(math.Round(kappa * float64(diff)))
-	// weight = int(math.Round(weight))
+
+	if queue > next_queue {
+		diff := queue - next_queue
+		weight = int(math.Round(kappa * float64(diff)))
+	} else {
+		weight = 0
+	}
 }
