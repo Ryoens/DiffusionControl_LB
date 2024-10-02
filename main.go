@@ -171,9 +171,11 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		randomIndex = WeightedRoundRobin_AdjacentLB()
 		proxyURL.Host = randomIndex.IP + tcp_port
 	} else {
-		randomIndex = WeightedRoundRobin_Backend()
+		randomIndex = RoundRobin_Backend()
 		proxyURL.Host = randomIndex.IP + dst_port
 	}
+
+	fmt.Println(queue)
 
 	// デバック用(選択されたIPアドレスの確認)
 	fmt.Println("Selected IP:", randomIndex, proxyURL)
@@ -199,6 +201,10 @@ func WeightedRoundRobin_AdjacentLB() Server {
 
 	totalWeight := 0
 	for _, server := range clusterLBs {
+		if !server.IsHealthy {
+			server.weight = 0
+		}
+
 		totalWeight += server.weight
 	}
 
@@ -228,7 +234,7 @@ func WeightedRoundRobin_AdjacentLB() Server {
 }
 
 // クラスタ内でのラウンドロビン(バックエンドサーバへの振り分け)
-func WeightedRoundRobin_Backend() Server {
+func RoundRobin_Backend() Server {
 	list := proxyIPs[currentIndex]
 	currentIndex = (currentIndex + 1) % len(proxyIPs)
 

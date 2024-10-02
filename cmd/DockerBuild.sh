@@ -26,7 +26,15 @@ KEY=0
 JSON_FILE="../json/config.json"
 QTY_CLUSTER=$(($1))
 
-docker image build ./ -t lb:latest
+image_exists=$(docker image ls | grep lb | wc -l)
+echo $image_exists
+
+if [ "$image_exists" -eq 0 ]; then
+	echo "make image lb"
+	docker image build ./ -t lb:latest
+else 
+	echo "image lb exists"
+fi
 
 docker network rm gushing-ecstasy
 docker network create gushing-ecstasy --driver=bridge --subnet=114.51.4.0/24
