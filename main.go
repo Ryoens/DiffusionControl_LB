@@ -1,48 +1,49 @@
 package main
 
-import(
-	"os"
-	"os/exec"
-	"io"
-	"fmt"
-	"log"
-	"time"
-	"net"
-	"sync"
+import (
 	"context"
-	"strings"
-	"io/ioutil"
 	"encoding/json"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"log"
 	"math"
 	"math/rand"
-	"net/url"
+	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"time"
+
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	pb "custome_weightedRR/api"
 )
 
 type Server struct {
-	IP	string 
-	Weight	int
+	IP     string
+	Weight int
 	// 追加で各webサーバが持つセッション数を入れるかも
 }
 
 type Cluster struct {
 	Cluster_LB string `json:"cluster_lb"`
-	Web0      string `json:"web0"`
-	Web1      string `json:"web1"`
-	Web2      string `json:"web2"`
+	Web0       string `json:"web0"`
+	Web1       string `json:"web1"`
+	Web2       string `json:"web2"`
 }
 
 type LoadBalancer struct {
-	Address string
+	Address   string
 	IsHealthy bool
-	data int
-	weight int
+	data      int
+	weight    int
 }
 
 type server struct {
@@ -52,30 +53,32 @@ type server struct {
 // グローバル変数の定義
 var (
 	proxyIPs = []Server{
-		{"", 0}, 
+		{"", 0},
 		{"", 0},
 		{"", 0},
 	}
 
-	clusterLBs []LoadBalancer// 隣接リスト
+	clusterLBs []LoadBalancer // 隣接リスト
 
-	randomIndex Server
+	randomIndex  Server
 	my_clusterLB string
-	queue int // 処理待ちTCPセッション数 
-	wg sync.WaitGroup
+	queue        int // 処理待ちTCPセッション数
+	currentIndex int
+	wg           sync.WaitGroup
+	mutex        sync.RWMutex
 )
 
 const (
 	// 固定値の定義
-	tcp_port string = ":8001"
-	dst_port string = ":80" // webサーバ用
-	grpc_dest string = ":50051" // gRPCで使用
-	sleep_time int = 1
-	threshold int = 700
-	kappa float64 = 0.07
+	tcp_port   string  = ":8001"
+	dst_port   string  = ":80"    // webサーバ用
+	grpc_dest  string  = ":50051" // gRPCで使用
+	sleep_time int     = 1
+	threshold  int     = 700
+	kappa      float64 = 0.07
 )
 
-func init(){
+func init() {
 	// JSONファイルを開く
 	file, err := os.Open("./json/config.json")
 	if err != nil {
@@ -108,16 +111,16 @@ func init(){
 
 	// 自身のCluster_LBのIPアドレスを抽出
 	clusterLB := ip_addresses[1] // 最初のIPアドレスを取得
-	
+
 	// 各クラスタのLBのIPアドレスと照合
 	for _, cluster := range clusters {
 		if clusterLB != cluster.Cluster_LB {
 			// 各クラスタLBのIPアドレスをリストに追加
 			clusterLBs = append(clusterLBs, LoadBalancer{
-				Address: cluster.Cluster_LB, 
+				Address:   cluster.Cluster_LB,
 				IsHealthy: false,
-				data: 0, 
-				weight: 0,
+				data:      0,
+				weight:    0,
 			})
 		} else {
 			// proxyIPsにサーバ情報を設定
@@ -125,7 +128,7 @@ func init(){
 			proxyIPs[1].IP = cluster.Web1
 			proxyIPs[2].IP = cluster.Web2
 			my_clusterLB = cluster.Cluster_LB
-		} 
+		}
 	}
 
 	// デバック用
@@ -133,16 +136,16 @@ func init(){
 	fmt.Println(proxyIPs[0].IP, proxyIPs[1].IP, proxyIPs[2].IP, my_clusterLB, clusterLBs)
 }
 
-func main(){
+func main() {
 	wg.Add(1)
 	go gRPC_Server()
 
 	wg.Add(1)
 	go gRPC_Client()
-	
+
 	// 後で関数化するかも
 	s := http.Server{
-		Addr:	tcp_port,
+		Addr:    tcp_port,
 		Handler: http.HandlerFunc(lbHandler),
 	}
 
@@ -158,29 +161,22 @@ func main(){
 func lbHandler(w http.ResponseWriter, r *http.Request) {
 	queue++ // 処理待ちセッション数をインクリメント
 
+	proxyURL := &url.URL{
+		Scheme: "http",
+		Host:   "",
+	}
+
 	if queue > threshold {
 		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
 		randomIndex = WeightedRoundRobin_AdjacentLB()
+		proxyURL.Host = randomIndex.IP + tcp_port
 	} else {
-		// ランダムシードを設定
-		rand.Seed(time.Now().UnixNano())
-		for i := range proxyIPs{
-			proxyIPs[i].Weight = rand.Intn(10)+1
-		}
-
 		randomIndex = WeightedRoundRobin_Backend()
+		proxyURL.Host = randomIndex.IP + dst_port
 	}
 
 	// デバック用(選択されたIPアドレスの確認)
-	fmt.Println("Selected IP:", randomIndex)
-	fmt.Printf("---\n")
-
-	proxyURL := &url.URL {
-		Scheme: "http",
-		Host: randomIndex.IP + dst_port,
-	}
-
-	fmt.Println(proxyURL)
+	fmt.Println("Selected IP:", randomIndex, proxyURL)
 
 	// レスポンスを書き換える
 	modifier := func(res *http.Response) error {
@@ -190,19 +186,29 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 
 	// make reverse proxy
 	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
+	proxy.ModifyResponse = modifier // ここに入れるとすぐレスポンス返却されてしまう
 	proxy.ServeHTTP(w, r)
-	proxy.ModifyResponse = modifier
+	// リバースプロキシ後に入れるとカウントがデクリメントされない
 }
 
 // クラスタ間の重みづけラウンドロビン(隣接LBへの振り分け)
 func WeightedRoundRobin_AdjacentLB() Server {
-	// 重みは設定されている状態 (乱数はいらない)
+	// 重みは動的に変化した値を取得
+	mutex.RLock()
+	defer mutex.RUnlock()
+
 	totalWeight := 0
 	for _, server := range clusterLBs {
 		totalWeight += server.weight
 	}
 
+	// すべての重みが0の場合(どこの隣接LBも空いていないとき)
+	if totalWeight == 0 {
+		return Server{}
+	}
+
 	// 0からtotalWeight-1までの乱数を生成
+	rand.Seed(time.Now().UnixNano())
 	randomWeight := rand.Intn(totalWeight)
 
 	fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
@@ -210,7 +216,7 @@ func WeightedRoundRobin_AdjacentLB() Server {
 	for _, server := range clusterLBs {
 		if randomWeight < server.weight {
 			return Server{
-				IP: server.Address,
+				IP:     server.Address,
 				Weight: server.weight,
 			}
 		}
@@ -218,30 +224,15 @@ func WeightedRoundRobin_AdjacentLB() Server {
 	}
 
 	// ここには到達しないはずだが、デフォルトで最初のサーバーを返す
-	return proxyIPs[0]
+	return Server{}
 }
 
 // クラスタ内でのラウンドロビン(バックエンドサーバへの振り分け)
 func WeightedRoundRobin_Backend() Server {
-	totalWeight := 0
-	for _, server := range proxyIPs {
-		totalWeight += server.Weight
-	}
+	list := proxyIPs[currentIndex]
+	currentIndex = (currentIndex + 1) % len(proxyIPs)
 
-	// 0からtotalWeight-1までの乱数を生成
-	randomWeight := rand.Intn(totalWeight)
-
-	fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
-	// 重みでサーバーを選択
-	for _, server := range proxyIPs {
-		if randomWeight < server.Weight {
-			return server
-		}
-		randomWeight -= server.Weight
-	}
-
-	// ここには到達しないはずだが、デフォルトで最初のサーバーを返す
-	return proxyIPs[0]
+	return list
 }
 
 // gRPCサーバ
@@ -371,11 +362,13 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 			return
 		}
 		log.Printf("Received control response: %d", in.Payload)
-		
+
+		mutex.Lock()
 		clusterLBs[num].data = int(in.Payload)
 
 		fmt.Println(clusterLBs[num].data, clusterLBs)
-		Calculate(clusterLBs[num].data, num) 
+		Calculate(clusterLBs[num].data, num)
+		mutex.Unlock()
 	}
 }
 
