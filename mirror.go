@@ -162,7 +162,9 @@ func main(){
 
 // リクエストをweighted RRで処理
 func lbHandler(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
 	queue++ // 処理待ちセッション数をインクリメント
+	mutex.Unlock()
 
 	proxyURL := &url.URL{
 		Scheme: "http",
@@ -185,7 +187,9 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 
 	// レスポンスを書き換える
 	modifier := func(res *http.Response) error {
-		queue--
+		mutex.Lock()
+		queue-- // 処理完了後にデクリメント
+		mutex.Unlock()
 		return nil
 	}
 
