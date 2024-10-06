@@ -1,5 +1,5 @@
 # Usage: make [タスク名] [数値]
-ARG=$(filter-out $@,$(MAKECMDGOALS))
+ARG=$(filter-out $@,$(MAKECMDGOALS))-1
 build: 
 	echo $(ARG)
 	@cd cmd && ./DockerBuild.sh $(ARG)

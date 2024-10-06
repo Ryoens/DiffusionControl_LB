@@ -6,9 +6,10 @@ services:
         container_name : 'Cluster@num@_LB'
         ports :
             - :8001
-        # 一時的にvolumeを追加　(後でDockerfileに定義)
+        # 後で相対パスにしたい
         volumes:
             - /home/enk/docker/master/go_lb:/home/ubuntu
+        # command: go run main.go
         networks :
             gushing-ecstasy :
             cluster@num@-local-net :

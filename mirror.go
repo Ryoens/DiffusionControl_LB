@@ -1,41 +1,49 @@
 package main
 
-import(
-	"os"
-	"os/exec"
-	"fmt"
-	"log"
-	"time"
-	"net"
-	"sync"
+import (
 	"context"
-	"strings"
-	"strconv"
-	"io/ioutil"
 	"encoding/json"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"log"
 	"math"
 	"math/rand"
-	"net/url"
+	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"time"
+
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	pb "custome_weightedRR/api"
 )
 
 type Server struct {
-	IP	string 
-	Weight	int
+	IP     string
+	Weight int
 	// 追加で各webサーバが持つセッション数を入れるかも
 }
 
 type Cluster struct {
 	Cluster_LB string `json:"cluster_lb"`
-	Web0      string `json:"web0"`
-	Web1      string `json:"web1"`
-	Web2      string `json:"web2"`
+	Web0       string `json:"web0"`
+	Web1       string `json:"web1"`
+	Web2       string `json:"web2"`
+}
+
+type LoadBalancer struct {
+	Address   string
+	IsHealthy bool
+	data      int
+	weight    int
 }
 
 type server struct {
@@ -45,29 +53,32 @@ type server struct {
 // グローバル変数の定義
 var (
 	proxyIPs = []Server{
-		{"", 0}, 
+		{"", 0},
 		{"", 0},
 		{"", 0},
 	}
-	randomIndex Server
-	clusterLBs []string // 隣接リスト
+
+	clusterLBs []LoadBalancer // 隣接リスト
+
+	randomIndex  Server
 	my_clusterLB string
-	data []int
-	queue int // 処理待ちTCPセッション数
-	weight int 
+	queue        int // 処理待ちTCPセッション数
+	currentIndex int
+	wg           sync.WaitGroup
+	mutex        sync.RWMutex
 )
 
 const (
 	// 固定値の定義
-	tcp_port string = ":8001"
-	dst_port string = ":80" // webサーバ用
-	grpc_dest string = ":50051" // gRPCで使用
-	sleep_time int = 1
-	threshold int = 700
-	kappa float64 = 0.07
+	tcp_port   string  = ":8001"
+	dst_port   string  = ":80"    // webサーバ用
+	grpc_dest  string  = ":50051" // gRPCで使用
+	sleep_time int     = 1
+	threshold  int     = 700
+	kappa      float64 = 0.07
 )
 
-func init(){
+func init() {
 	// JSONファイルを開く
 	file, err := os.Open("./json/config.json")
 	if err != nil {
@@ -100,21 +111,25 @@ func init(){
 
 	// 自身のCluster_LBのIPアドレスを抽出
 	clusterLB := ip_addresses[1] // 最初のIPアドレスを取得
-	
+
 	// 各クラスタのLBのIPアドレスと照合
 	for _, cluster := range clusters {
 		if clusterLB != cluster.Cluster_LB {
 			// 各クラスタLBのIPアドレスをリストに追加
-			clusterLBs = append(clusterLBs, cluster.Cluster_LB)
+			clusterLBs = append(clusterLBs, LoadBalancer{
+				Address:   cluster.Cluster_LB,
+				IsHealthy: false,
+				data:      0,
+				weight:    0,
+			})
 		} else {
 			// proxyIPsにサーバ情報を設定
 			proxyIPs[0].IP = cluster.Web0
 			proxyIPs[1].IP = cluster.Web1
 			proxyIPs[2].IP = cluster.Web2
 			my_clusterLB = cluster.Cluster_LB
-		} 
+		}
 	}
-	data = make([]int, len(clusterLBs))
 
 	// デバック用
 	// Cluster2の場合: 10.0.3.10 10.0.3.11 10.0.3.12 114.51.4.4 [114.51.4.2 114.51.4.3]
@@ -122,20 +137,18 @@ func init(){
 }
 
 func main(){
-	var wg sync.WaitGroup
-
 	wg.Add(1)
-	go gRPC_Server(&wg)
+	go gRPC_Server()
 
 	// waitgroupを利用し、複数のサーバに接続するたびにプロセスを生成
 	for i, address := range clusterLBs {
 		wg.Add(1)
-		go gRPC_Client(address, i, &wg)
+		go gRPC_Client(address.Address, i)
 	}
 	
 	// 後で関数化するかも
 	s := http.Server{
-		Addr:	tcp_port,
+		Addr:    tcp_port,
 		Handler: http.HandlerFunc(lbHandler),
 	}
 
@@ -151,61 +164,88 @@ func main(){
 func lbHandler(w http.ResponseWriter, r *http.Request) {
 	queue++ // 処理待ちセッション数をインクリメント
 
+	proxyURL := &url.URL{
+		Scheme: "http",
+		Host:   "",
+	}
+
 	if queue > threshold {
 		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
+		randomIndex = WeightedRoundRobin_AdjacentLB()
+		proxyURL.Host = randomIndex.IP + tcp_port
 	} else {
-		// ランダムシードを設定
-		rand.Seed(time.Now().UnixNano())
-		for i := range proxyIPs{
-			proxyIPs[i].Weight = rand.Intn(10)+1
-		}
-
-		for _, server := range proxyIPs {
-			fmt.Printf("IP: %s, Weight: %d\n", server.IP, server.Weight)
-		}
-
-		randomIndex = WeightedRoundRobin()
-		fmt.Println("Selected IP:", randomIndex)
-		fmt.Printf("---\n")
+		randomIndex = RoundRobin_Backend()
+		proxyURL.Host = randomIndex.IP + dst_port
 	}
 
-	proxyURL := &url.URL {
-		Scheme: "http",
-		Host: randomIndex.IP + dst_port,
-	}
+	fmt.Println(queue)
 
-	fmt.Println(proxyURL)
+	// デバック用(選択されたIPアドレスの確認)
+	fmt.Println("Selected IP:", randomIndex, proxyURL)
+
+	// レスポンスを書き換える
+	modifier := func(res *http.Response) error {
+		queue--
+		return nil
+	}
 
 	// make reverse proxy
 	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
+	proxy.ModifyResponse = modifier // ここに入れるとすぐレスポンス返却されてしまう
 	proxy.ServeHTTP(w, r)
+	// リバースプロキシ後に入れるとカウントがデクリメントされない
 }
 
-// 重みづけラウンドロビン(バックエンドサーバへの振り分け) -> 後で通常のラウンドロビンに変更するかも
-func WeightedRoundRobin() Server {
+// クラスタ間の重みづけラウンドロビン(隣接LBへの振り分け)
+func WeightedRoundRobin_AdjacentLB() Server {
+	// 重みは動的に変化した値を取得
+	mutex.RLock()
+	defer mutex.RUnlock()
+
 	totalWeight := 0
-	for _, server := range proxyIPs {
-		totalWeight += server.Weight
+	for _, server := range clusterLBs {
+		if !server.IsHealthy {
+			server.weight = 0
+		}
+
+		totalWeight += server.weight
+	}
+
+	// すべての重みが0の場合(どこの隣接LBも空いていないとき)
+	if totalWeight == 0 {
+		return Server{}
 	}
 
 	// 0からtotalWeight-1までの乱数を生成
+	rand.Seed(time.Now().UnixNano())
 	randomWeight := rand.Intn(totalWeight)
 
 	fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
 	// 重みでサーバーを選択
-	for _, server := range proxyIPs {
-		if randomWeight < server.Weight {
-			return server
+	for _, server := range clusterLBs {
+		if randomWeight < server.weight {
+			return Server{
+				IP:     server.Address,
+				Weight: server.weight,
+			}
 		}
-		randomWeight -= server.Weight
+		randomWeight -= server.weight
 	}
 
 	// ここには到達しないはずだが、デフォルトで最初のサーバーを返す
-	return proxyIPs[0]
+	return Server{}
+}
+
+// クラスタ内でのラウンドロビン(バックエンドサーバへの振り分け)
+func RoundRobin_Backend() Server {
+	list := proxyIPs[currentIndex]
+	currentIndex = (currentIndex + 1) % len(proxyIPs)
+
+	return list
 }
 
 // gRPCサーバ
-func gRPC_Server(wg *sync.WaitGroup) {
+func gRPC_Server() {
 	defer wg.Done()
 
 	lis, err := net.Listen("tcp", grpc_dest)
@@ -228,28 +268,42 @@ func (s *server) GetBackendStatus(ctx context.Context, req *pb.BackendRequest) (
 
 // 隣接LBへの制御情報の送信
 func (s *server) ControlStream(stream pb.LoadBalancer_ControlStreamServer) error {
-	rand.Seed(time.Now().UnixNano()) // ランダムシードを設定
-
 	for {
 		in, err := stream.Recv()
+		if err == io.EOF {
+			return nil
+		}
 		if err != nil {
 			log.Printf("Error receiving control message: %v", err)
 			return err
 		}
-		// 制御情報をランダムな整数として生成
-		randomControlValue := rand.Intn(100) // 0〜99のランダム整数
-		log.Printf("Received control command: %s, sending random value: %d", in.Command, randomControlValue)
+		log.Printf("Received control command: %s, TCP Waiting Sessions: %d", in.Command, queue)
 
-		// ランダムな制御情報をクライアントに送信
-		if err := stream.Send(&pb.ControlResponse{Status: "ok", Info: fmt.Sprintf("%d", randomControlValue)}); err != nil {
+		// 現在の制御情報をクライアントに送信
+		if err := stream.Send(&pb.ControlResponse{Status: "ok", Payload: int64(queue)}); err != nil {
 			log.Printf("Error sending response: %v", err)
 			return err
 		}
 	}
 }
 
+func healthCheck(client pb.LoadBalancerClient, adjacent_lb string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(sleep_time)*time.Second)
+	defer cancel()
+
+	req := &pb.BackendRequest{ServerName: "server-1"}
+	res, err := client.GetBackendStatus(ctx, req)
+	if err != nil || !res.IsHealthy {
+		log.Printf("Server %s is not healthy, trying the next one...", adjacent_lb)
+		return false
+	}
+
+	log.Printf("Server %s is healthy, starting control stream...", adjacent_lb)
+	return true
+}
+
 // gRPCクライアント(変更前)
-func gRPC_Client(address string, i int, wg *sync.WaitGroup) {
+func gRPC_Client(address string, i int) {
 	defer wg.Done()
 
 	adjacent_lb := address + grpc_dest
@@ -263,27 +317,43 @@ func gRPC_Client(address string, i int, wg *sync.WaitGroup) {
 
 	client := pb.NewLoadBalancerClient(conn)
 
-	// 双方向ストリーミングの制御情報送受信
+	if healthCheck(client, adjacent_lb) {
+		clusterLBs[i].IsHealthy = true
+		// wg.Add(1)
+		handleControlStream(client, adjacent_lb, i)
+	} else {
+		clusterLBs[i].IsHealthy = false
+		log.Printf("Load Balancer at %s is down", adjacent_lb)
+		return
+	}
+	// 複数LBに接続する場合、切り替えに遅延を設定...?
+	// time.Sleep(time.Duration(sleep_time) * time.Second)
+
+}
+
+func handleControlStream(client pb.LoadBalancerClient, address string, num int) {
+	//defer wg.Done()
+
+	fmt.Println("aaa")
+
+	// ここからヘルスチェックでtrueだった場合の処理
+	// 双方向ストリーミングの制御情報送受信 (streamを作成)
 	stream, err := client.ControlStream(context.Background())
 	if err != nil {
 		log.Fatalf("Error creating stream: %v", err)
+		// log.Printf("Error creating stream: %v", err)
+		return
 	}
+
+	fmt.Println("bbb")
 
 	// 定期的にヘルスチェックと制御情報を送受信
 	ticker := time.NewTicker(time.Duration(sleep_time) * time.Second)
 	for range ticker.C {
-		// ヘルスチェック
-		req := &pb.BackendRequest{ServerName: adjacent_lb} // 本当は宛先サーバにしたい
-		res, err := client.GetBackendStatus(context.Background(), req)
-		if err != nil {
-			log.Printf("Could not get backend status: %v", err)
-		} else {
-			log.Printf("Backend is healthy: %v", res.IsHealthy)
-		}
-
 		// 制御情報の送信
-		if err := stream.Send(&pb.ControlMessage{Command: "update_policy", Payload: "new_policy_data"}); err != nil {
+		if err := stream.Send(&pb.ControlMessage{Command: "update_policy", Payload: int64(queue)}); err != nil {
 			log.Printf("Error sending control message: %v", err)
+			clusterLBs[num].IsHealthy = false
 
 			if status.Code(err) == codes.Canceled || status.Code(err) == codes.Unavailable {
 				log.Printf("Send Connection to %s was lost, reconnecting...", address)
@@ -296,6 +366,7 @@ func gRPC_Client(address string, i int, wg *sync.WaitGroup) {
 		in, err := stream.Recv()
 		if err != nil {
 			log.Printf("Error receiving control response: %v", err)
+			clusterLBs[num].IsHealthy = false
 
 			if status.Code(err) == codes.Canceled || status.Code(err) == codes.Unavailable {
 				log.Printf("Receive Connection to %s was lost, reconnecting...", address)
@@ -303,23 +374,26 @@ func gRPC_Client(address string, i int, wg *sync.WaitGroup) {
 			}
 			return
 		}
-		log.Printf("Received control response: %s", in.Info)
-		
-		data[i], err = strconv.Atoi(in.Info)
-		if err != nil {
-			log.Fatalf("Failed to convert control response to int: %v", err)
-		}
+		log.Printf("Received control response: %d", in.Payload)
 
-		fmt.Println(data)
-		Calculate(data[i]) 
+		mutex.Lock()
+		clusterLBs[num].data = int(in.Payload)
+
+		fmt.Println(clusterLBs[num].data, clusterLBs)
+		Calculate(clusterLBs[num].data, num)
+		mutex.Unlock()
 	}
 }
 
 // 隣接LBのフィードバック情報を取得するたびに本関数を呼び出し
 // 転送するリクエスト数の計算(重み)
-func Calculate(next_queue int) {
+func Calculate(next_queue int, num int) {
 	// DC方式で計算
-	diff := queue - next_queue
-	weight = int(math.Round(kappa * float64(diff)))
-	// weight = int(math.Round(weight))
+
+	if queue > next_queue {
+		diff := queue - next_queue
+		clusterLBs[num].weight = int(math.Round(kappa * float64(diff)))
+	} else {
+		clusterLBs[num].weight = 0
+	}
 }
