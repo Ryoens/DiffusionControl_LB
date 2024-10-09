@@ -29,6 +29,7 @@ import (
 type Server struct {
 	IP     string
 	Weight int
+	Sessions int
 	// 追加で各webサーバが持つセッション数を入れるかも
 }
 
@@ -44,6 +45,7 @@ type LoadBalancer struct {
 	IsHealthy bool
 	data      int
 	weight    int
+	transport int
 }
 
 type server struct {
@@ -53,9 +55,9 @@ type server struct {
 // グローバル変数の定義
 var (
 	proxyIPs = []Server{
-		{"", 0},
-		{"", 0},
-		{"", 0},
+		{"", 0, 0},
+		{"", 0, 0},
+		{"", 0, 0},
 	}
 
 	clusterLBs []LoadBalancer // 隣接リスト
@@ -66,11 +68,18 @@ var (
 	currentIndex int
 	wg           sync.WaitGroup
 	mutex        sync.RWMutex
+
+	// 評価用パラメータ
+	total_queue int
+	current_queue []int
+	data []int
+	weight []int
 )
 
 const (
 	// 固定値の定義
 	tcp_port   string  = ":8001"
+	sub_port   string  = ":8002"
 	dst_port   string  = ":80"    // webサーバ用
 	grpc_dest  string  = ":50051" // gRPCで使用
 	sleep_time int     = 1
@@ -112,6 +121,9 @@ func init() {
 	// 自身のCluster_LBのIPアドレスを抽出
 	clusterLB := ip_addresses[1] // 最初のIPアドレスを取得
 
+	data = make([]int, len(clusterLBs))
+	weight = make([]int, len(clusterLBs))
+
 	// 各クラスタのLBのIPアドレスと照合
 	for _, cluster := range clusters {
 		if clusterLB != cluster.Cluster_LB {
@@ -121,6 +133,7 @@ func init() {
 				IsHealthy: false,
 				data:      0,
 				weight:    0,
+				transport: 0, 
 			})
 		} else {
 			// proxyIPsにサーバ情報を設定
@@ -146,23 +159,41 @@ func main(){
 		go gRPC_Client(address.Address, i)
 	}
 	
-	// 後で関数化するかも
-	s := http.Server{
-		Addr:    tcp_port,
-		Handler: http.HandlerFunc(lbHandler),
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s := http.Server{
+			Addr:    tcp_port,
+			Handler: http.HandlerFunc(lbHandler),
+		}
 
-	fmt.Printf("HTTP server is listening on %s...\n", tcp_port)
-	if err := s.ListenAndServe(); err != nil {
-		log.Fatal(err.Error())
-	}
+		fmt.Printf("HTTP server is listening on %s...\n", tcp_port)
+		if err := s.ListenAndServe(); err != nil {
+			log.Fatal(err.Error())
+		}
+	}()
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s := http.Server{
+			Addr:    sub_port,
+			Handler: http.HandlerFunc(dataReceiver),
+		}
+
+		fmt.Printf("HTTP server is listening on %s...\n", sub_port)
+		if err := s.ListenAndServe(); err != nil {
+			log.Fatal(err.Error())
+		}
+	}()
+	
 	wg.Wait()
 }
 
 // リクエストをweighted RRで処理
 func lbHandler(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
+	total_queue++
 	queue++ // 処理待ちセッション数をインクリメント
 	mutex.Unlock()
 
@@ -200,6 +231,23 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 	// リバースプロキシ後に入れるとカウントがデクリメントされない
 }
 
+func dataReceiver(w http.ResponseWriter, r *http.Request) {
+	// 負荷テスト終了後に各パラメータのデータを取得
+	fmt.Printf("total_request: %d\n", total_queue)
+	fmt.Printf("queue_transition: %d\n", current_queue)
+	fmt.Printf("total_data: %d\n", data)
+	fmt.Printf("total_weight: %d\n", weight)
+
+	for i := 0; i < len(clusterLBs); i++ {
+		fmt.Printf("amount of transport(%s): %d\n", clusterLBs[i].Address, clusterLBs[i].transport)
+		// if clusterLBs[i].data > 0 && clusterLBs[i].weight > 0 {
+		// 	fmt.Printf("amount of transport: %d", clusterLBs[i].transport)
+		// }
+	}
+
+	os.Exit(1)
+} 
+
 // クラスタ間の重みづけラウンドロビン(隣接LBへの振り分け)
 func WeightedRoundRobin_AdjacentLB() Server {
 	// 重みは動的に変化した値を取得
@@ -226,8 +274,9 @@ func WeightedRoundRobin_AdjacentLB() Server {
 
 	fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
 	// 重みでサーバーを選択
-	for _, server := range clusterLBs {
+	for i, server := range clusterLBs {
 		if randomWeight < server.weight {
+			clusterLBs[i].transport++
 			return Server{
 				IP:     server.Address,
 				Weight: server.weight,
@@ -323,7 +372,6 @@ func gRPC_Client(address string, i int) {
 
 	if healthCheck(client, adjacent_lb) {
 		clusterLBs[i].IsHealthy = true
-		// wg.Add(1)
 		handleControlStream(client, adjacent_lb, i)
 	} else {
 		clusterLBs[i].IsHealthy = false
@@ -338,8 +386,6 @@ func gRPC_Client(address string, i int) {
 func handleControlStream(client pb.LoadBalancerClient, address string, num int) {
 	//defer wg.Done()
 
-	fmt.Println("aaa")
-
 	// ここからヘルスチェックでtrueだった場合の処理
 	// 双方向ストリーミングの制御情報送受信 (streamを作成)
 	stream, err := client.ControlStream(context.Background())
@@ -348,8 +394,6 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 		// log.Printf("Error creating stream: %v", err)
 		return
 	}
-
-	fmt.Println("bbb")
 
 	// 定期的にヘルスチェックと制御情報を送受信
 	ticker := time.NewTicker(time.Duration(sleep_time) * time.Second)
@@ -400,4 +444,8 @@ func Calculate(next_queue int, num int) {
 	} else {
 		clusterLBs[num].weight = 0
 	}
+
+	current_queue = append(current_queue, queue)
+	data = append(data, clusterLBs[num].data)
+	weight = append(weight, clusterLBs[num].weight)
 }
