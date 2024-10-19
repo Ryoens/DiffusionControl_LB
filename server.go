@@ -1,4 +1,4 @@
-// ソケット通信を利用
+// ソケット通信を使用
 package main
 
 import (
@@ -49,6 +49,13 @@ type LoadBalancer struct {
 	transport int
 }
 
+type Response struct {
+	TotalQueue int `json:"total_queue"`
+	CurrentQueue []int `json:"current_queue"`
+	Data []int `json:"data"`
+	Weight []int `json:"weight"`
+}
+
 type server struct {
 	pb.UnimplementedLoadBalancerServer
 }
@@ -75,6 +82,8 @@ var (
 	current_queue []int
 	data []int
 	weight []int
+
+	final bool
 )
 
 const (
@@ -187,7 +196,7 @@ func main(){
 			log.Fatal(err.Error())
 		}
 	}()
-	
+
 	wg.Wait()
 }
 
@@ -233,20 +242,41 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func dataReceiver(w http.ResponseWriter, r *http.Request) {
+	if final == true {
+		os.Exit(1)
+	}
+
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Content-Type", "application/json")
+
 	// 負荷テスト終了後に各パラメータのデータを取得
 	fmt.Printf("total_request: %d\n", total_queue)
 	fmt.Printf("queue_transition: %d\n", current_queue)
 	fmt.Printf("total_data: %d\n", data)
 	fmt.Printf("total_weight: %d\n", weight)
 
+	// 本来ならクラスタごとのデータを取得したい
 	for i := 0; i < len(clusterLBs); i++ {
 		fmt.Printf("amount of transport(%s): %d\n", clusterLBs[i].Address, clusterLBs[i].transport)
-		// if clusterLBs[i].data > 0 && clusterLBs[i].weight > 0 {
-		// 	fmt.Printf("amount of transport: %d", clusterLBs[i].transport)
-		// }
 	}
 
-	os.Exit(1)
+	response := Response{
+		TotalQueue: total_queue,
+		CurrentQueue: current_queue,
+		Data: data,
+		Weight: weight,
+	}
+
+	fmt.Println(response)
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, "Failed to encode JSON", http.StatusInternalServerError)
+		log.Println(err)
+		return
+	}
+
+	final = true
+	// os.Exit(1)
 } 
 
 // クラスタ間の重みづけラウンドロビン(隣接LBへの振り分け)

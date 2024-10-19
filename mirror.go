@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"flag"
 	"io"
 	"io/ioutil"
 	"log"
@@ -83,6 +84,9 @@ var (
 	weight []int
 
 	final bool
+	feedback int
+	threshold int
+	kappa float64
 )
 
 const (
@@ -92,11 +96,23 @@ const (
 	dst_port   string  = ":80"    // webサーバ用
 	grpc_dest  string  = ":50051" // gRPCで使用
 	sleep_time int     = 1
-	threshold  int     = 700
-	kappa      float64 = 0.07
 )
 
 func init() {
+	// 引数の取得
+	t := flag.Int("t", 0, "feedback information")
+	q := flag.Int("q", 0, "threshold")
+	k := flag.Float64("k", 0.0, "diffusion coefficient")
+
+	flag.Parse()
+	feedback = *t
+    threshold = *q
+    kappa = *k
+
+	fmt.Printf("feedback -t : %d\n", feedback)
+    fmt.Printf("threshold -q : %d\n", threshold)
+    fmt.Printf("kappa -k : %.2f\n", kappa)
+
 	// JSONファイルを開く
 	file, err := os.Open("./json/config.json")
 	if err != nil {
@@ -196,7 +212,31 @@ func main(){
 		}
 	}()
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		getData()
+	}()
+
 	wg.Wait()
+}
+
+func getData() {
+	for {
+		fmt.Println("loop")
+
+		if final {
+			os.Exit(1)
+		}
+
+		for _, server := range clusterLBs {
+			current_queue = append(current_queue, queue)
+			data = append(data, server.data)
+			weight = append(weight, server.weight)
+		}
+
+		time.Sleep(time.Duration(sleep_time) * time.Second)
+	}
 }
 
 // リクエストをweighted RRで処理
@@ -241,9 +281,6 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func dataReceiver(w http.ResponseWriter, r *http.Request) {
-	if final == true {
-		os.Exit(1)
-	}
 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
@@ -371,7 +408,7 @@ func (s *server) ControlStream(stream pb.LoadBalancer_ControlStreamServer) error
 }
 
 func healthCheck(client pb.LoadBalancerClient, adjacent_lb string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(sleep_time)*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(feedback) * time.Millisecond)
 	defer cancel()
 
 	req := &pb.BackendRequest{ServerName: "server-1"}
@@ -426,7 +463,8 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 	}
 
 	// 定期的にヘルスチェックと制御情報を送受信
-	ticker := time.NewTicker(time.Duration(sleep_time) * time.Second)
+	// ticker := time.NewTicker(time.Duration(sleep_time) * time.Second)
+	ticker := time.NewTicker(time.Duration(feedback) * time.Millisecond)
 	for range ticker.C {
 		// 制御情報の送信
 		if err := stream.Send(&pb.ControlMessage{Command: "update_policy", Payload: int64(queue)}); err != nil {
@@ -475,7 +513,7 @@ func Calculate(next_queue int, num int) {
 		clusterLBs[num].weight = 0
 	}
 
-	current_queue = append(current_queue, queue)
-	data = append(data, clusterLBs[num].data)
-	weight = append(weight, clusterLBs[num].weight)
+	// current_queue = append(current_queue, queue)
+	// data = append(data, clusterLBs[num].data)
+	// weight = append(weight, clusterLBs[num].weight)
 }

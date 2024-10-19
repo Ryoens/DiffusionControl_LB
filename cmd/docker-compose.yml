@@ -6,11 +6,9 @@ services:
         container_name : 'Cluster@num@_LB'
         ports :
             - :8001
-        # 後で相対パスにしたい
+        # 違う環境で実行する際は、このvolumesを変更する
         volumes:
             - /home/enk/docker/master/go_lb:/home/ubuntu
-        # command: go run main.go
-        # command: go run mirror.go
         networks :
             gushing-ecstasy :
             cluster@num@-local-net :

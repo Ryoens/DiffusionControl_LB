@@ -6,5 +6,7 @@ build:
 destroy:
 	echo $(ARG)
 	@cd cmd && ./DockerDestroy.sh $(ARG)
+exec:
+	@cd cmd && ./Execute.sh
 %:
 	@:
