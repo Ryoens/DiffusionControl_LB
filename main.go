@@ -1,3 +1,4 @@
+// 接続数に応じてプロセスを生成 (gRPCシーケンス修正前)
 package main
 
 import (
