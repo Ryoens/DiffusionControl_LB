@@ -26,3 +26,14 @@ do
 done
 
 # 実験データの取得
+read -p "仮想ユーザ数: " vus
+echo $vus
+
+k6 run ../test.js --vus $vus
+
+for num in $(seq 2 $((count + 1)))
+do 
+    i=$((num - 2))
+    echo Cluster$i 
+    curl -X GET 114.51.4.$num:8002; 
+done

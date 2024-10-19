@@ -60,6 +60,11 @@ type server struct {
 	pb.UnimplementedLoadBalancerServer
 }
 
+type Split_data struct {
+	Data []int
+	Weight []int
+}
+
 // グローバル変数の定義
 var (
 	proxyIPs = []Server{
@@ -229,8 +234,9 @@ func getData() {
 			os.Exit(1)
 		}
 
+		current_queue = append(current_queue, queue)
+
 		for _, server := range clusterLBs {
-			current_queue = append(current_queue, queue)
 			data = append(data, server.data)
 			weight = append(weight, server.weight)
 		}
@@ -296,6 +302,14 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("amount of transport(%s): %d\n", clusterLBs[i].Address, clusterLBs[i].transport)
 	}
 
+	clusters := make([]Split_data, len(clusterLBs))
+
+	for i := 0; i < len(data); i++ {
+		clusterIndex := i % 4
+		clusters[clusterIndex].Data = append(clusters[clusterIndex].Data, data[i])
+		clusters[clusterIndex].Weight = append(clusters[clusterIndex].Weight, weight[i])
+	}
+
 	response := Response{
 		TotalQueue: total_queue,
 		CurrentQueue: current_queue,
@@ -304,6 +318,16 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fmt.Println(response)
+
+	for _, cluster := range clusters {
+		fmt.Println(cluster.Data)
+		fmt.Println(cluster.Weight)
+
+		fmt.Fprintf(w, "data: %d ", cluster.Data)
+		fmt.Fprintf(w, "\n")
+		fmt.Fprintf(w, "weight: %d ", cluster.Weight)
+		fmt.Fprintf(w, "\n")
+	}
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		http.Error(w, "Failed to encode JSON", http.StatusInternalServerError)
@@ -513,7 +537,4 @@ func Calculate(next_queue int, num int) {
 		clusterLBs[num].weight = 0
 	}
 
-	// current_queue = append(current_queue, queue)
-	// data = append(data, clusterLBs[num].data)
-	// weight = append(weight, clusterLBs[num].weight)
 }
