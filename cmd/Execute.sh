@@ -31,9 +31,12 @@ echo $vus
 
 k6 run ../test.js --vus $vus
 
+cd ..
+
 for num in $(seq 2 $((count + 1)))
 do 
-    i=$((num - 2))
-    echo Cluster$i 
-    curl -X GET 114.51.4.$num:8002; 
+    i=$((num - 2)) 
+    echo "Cluster$i" 
+    timestamp=$(date +"%Y%m%d_%H%M%S")
+    curl -X GET 114.51.4.$num:8002 -o ./log/Cluster$i"_"$timestamp.csv
 done

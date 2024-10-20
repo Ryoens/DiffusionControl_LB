@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"strconv"
 	"sync"
 	"time"
 
@@ -50,10 +51,13 @@ type LoadBalancer struct {
 }
 
 type Response struct {
-	TotalQueue int `json:"total_queue"`
-	CurrentQueue []int `json:"current_queue"`
-	Data []int `json:"data"`
-	Weight []int `json:"weight"`
+	TotalQueue int
+	CurrentQueue []int
+	Data []int
+	Weight []int
+	Feedback int
+	Threshold int
+	Kappa float64
 }
 
 type server struct {
@@ -279,6 +283,9 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 
+	// レスポンス返却までに遅延を設定?
+
+
 	// make reverse proxy
 	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
 	proxy.ModifyResponse = modifier // ここに入れるとすぐレスポンス返却されてしまう
@@ -288,8 +295,8 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 
 func dataReceiver(w http.ResponseWriter, r *http.Request) {
 
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Content-Type", "application/json")
+	// w.Header().Set("Access-Control-Allow-Origin", "*")
+	// w.Header().Set("Content-Type", "application/json")
 
 	// 負荷テスト終了後に各パラメータのデータを取得
 	fmt.Printf("total_request: %d\n", total_queue)
@@ -305,7 +312,7 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	clusters := make([]Split_data, len(clusterLBs))
 
 	for i := 0; i < len(data); i++ {
-		clusterIndex := i % 4
+		clusterIndex := i % len(clusterLBs)
 		clusters[clusterIndex].Data = append(clusters[clusterIndex].Data, data[i])
 		clusters[clusterIndex].Weight = append(clusters[clusterIndex].Weight, weight[i])
 	}
@@ -315,29 +322,94 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 		CurrentQueue: current_queue,
 		Data: data,
 		Weight: weight,
+		Feedback: feedback,
+		Threshold: threshold,
+		Kappa: kappa,
 	}
 
-	fmt.Println(response)
-
-	for _, cluster := range clusters {
-		fmt.Println(cluster.Data)
-		fmt.Println(cluster.Weight)
-
-		fmt.Fprintf(w, "data: %d ", cluster.Data)
-		fmt.Fprintf(w, "\n")
-		fmt.Fprintf(w, "weight: %d ", cluster.Weight)
-		fmt.Fprintf(w, "\n")
-	}
-
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, "Failed to encode JSON", http.StatusInternalServerError)
-		log.Println(err)
+	// --------
+	filename := "./log/output.csv"
+	file, err := os.Create(filename)
+	if err != nil {
+		fmt.Println("failure creating csv file:", err)
 		return
 	}
+	defer file.Close()
+
+	var csvData strings.Builder
+	header := []string{"CurrentQueue"}
+	for i := 0; i < len(clusterLBs); i++ {
+		header = append(header, fmt.Sprintf("%d_Data", i))
+		header = append(header, fmt.Sprintf("%d_Weight", i))
+	}
+	header = append(header, "TotalQueue")
+	header = append(header, "feedback")
+	header = append(header, "threshold")
+	header = append(header, "kappa")
+	// パラメータが増えた場合はcsv出力としてここで追加する
+	csvData.WriteString(strings.Join(header, ",") + "\n")
+
+	rowCount := len(response.CurrentQueue)
+
+	for i := 0; i < rowCount; i++ {
+		record := []string{fmt.Sprint(response.CurrentQueue[i])}
+
+		for j := 0; j < len(clusterLBs); j++ {
+			if i < len(clusters[j].Data) {
+				record = append(record, strconv.Itoa(clusters[j].Data[i]))
+			} else {
+				record = append(record, "0") // データがない場合は0を挿入
+			}
+
+			if i < len(clusters[j].Weight) {
+				record = append(record, strconv.Itoa(clusters[j].Weight[i]))
+			} else {
+				record = append(record, "0") // ウェイトがない場合は0を挿入
+			}
+		}
+
+		// TotalQueueを最初の行にのみ追加
+		if i == 0 {
+			record = append(record, strconv.Itoa(response.TotalQueue))
+			record = append(record, strconv.Itoa(response.Feedback))
+			record = append(record, strconv.Itoa(response.Threshold))
+			record = append(record, strconv.FormatFloat(response.Kappa, 'f', -1, 64))
+		} else {
+			record = append(record, "") // それ以外の行には空白を挿入
+			record = append(record, "")
+			record = append(record, "")
+			record = append(record, "")
+		}
+
+		csvData.WriteString(strings.Join(record, ",") + "\n") 
+	}
+
+	_, err = file.WriteString(csvData.String())
+	if err != nil {
+		fmt.Println("Error writing to CSV file:", err)
+		return
+	}
+	// --------
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+
+	http.ServeFile(w, r, filename)
 
 	final = true
 	// os.Exit(1)
 } 
+
+// ウェイトのスライスをカンマ区切りの文字列に変換するヘルパー関数
+func joinWeight(weight []int) string {
+	var result strings.Builder
+	for i, w := range weight {
+		if i > 0 {
+			result.WriteString(",")
+		}
+		result.WriteString(strconv.Itoa(w))
+	}
+	return result.String()
+}
 
 // クラスタ間の重みづけラウンドロビン(隣接LBへの振り分け)
 func WeightedRoundRobin_AdjacentLB() Server {

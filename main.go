@@ -10,7 +10,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math"
-	"math/rand"
+	// "math/rand"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -80,6 +80,8 @@ var (
 	my_clusterLB string
 	queue        int // 処理待ちTCPセッション数
 	currentIndex int
+	currentAdjacent int
+	temp int
 	wg           sync.WaitGroup
 	mutex        sync.RWMutex
 
@@ -259,7 +261,8 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if queue > threshold {
-		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
+		// Calculate関数で計算した値を転送するリクエスト数
+		// 新規リクエストに対して隣接LBに割り当て
 		randomIndex = WeightedRoundRobin_AdjacentLB()
 		proxyURL.Host = randomIndex.IP + tcp_port
 	} else {
@@ -342,43 +345,71 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 
 // クラスタ間の重みづけラウンドロビン(隣接LBへの振り分け)
 func WeightedRoundRobin_AdjacentLB() Server {
+	if len(clusterLBs) == 0 {
+		return Server{}
+	}
+
 	// 重みは動的に変化した値を取得
 	mutex.RLock()
 	defer mutex.RUnlock()
 
-	totalWeight := 0
-	for _, server := range clusterLBs {
-		if !server.IsHealthy {
-			server.weight = 0
+	// totalWeight := 0
+	// for _, server := range clusterLBs {
+	// 	if !server.IsHealthy {
+	// 		server.weight = 0
+	// 	}
+
+	// 	totalWeight += server.weight
+	// }
+
+	for {
+		currentServer := clusterLBs[currentAdjacent]
+
+		if currentServer.weight == 0 {
+			currentAdjacent = (currentAdjacent + 1) % len(clusterLBs)
+			temp = 0
+			continue
 		}
 
-		totalWeight += server.weight
+		if temp < currentServer.weight {
+			temp++
+			currentServer.transport++
+			return Server{
+				IP:     currentServer.Address,
+				Weight: currentServer.weight,
+			}
+		} else {
+			temp = 0
+			if currentServer.weight > 0 {
+				currentAdjacent = (currentAdjacent + 1) % len(clusterLBs)
+			}
+		}
 	}
 
 	// すべての重みが0の場合(どこの隣接LBも空いていないとき)
-	if totalWeight == 0 {
-		return Server{}
-	}
+	// if totalWeight == 0 {
+	// 	return Server{}
+	// }
 
-	// 0からtotalWeight-1までの乱数を生成
-	rand.Seed(time.Now().UnixNano())
-	randomWeight := rand.Intn(totalWeight)
+	// // 0からtotalWeight-1までの乱数を生成
+	// rand.Seed(time.Now().UnixNano())
+	// randomWeight := rand.Intn(totalWeight)
 
-	fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
-	// 重みでサーバーを選択
-	for i, server := range clusterLBs {
-		if randomWeight < server.weight {
-			clusterLBs[i].transport++
-			return Server{
-				IP:     server.Address,
-				Weight: server.weight,
-			}
-		}
-		randomWeight -= server.weight
-	}
+	// fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
+	// // 重みでサーバーを選択
+	// for i, server := range clusterLBs {
+	// 	if randomWeight < server.weight {
+	// 		clusterLBs[i].transport++
+	// 		return Server{
+	// 			IP:     server.Address,
+	// 			Weight: server.weight,
+	// 		}
+	// 	}
+	// 	randomWeight -= server.weight
+	// }
 
 	// ここには到達しないはずだが、デフォルトで最初のサーバーを返す
-	return Server{}
+	// return Server{}
 }
 
 // クラスタ内でのラウンドロビン(バックエンドサーバへの振り分け)
