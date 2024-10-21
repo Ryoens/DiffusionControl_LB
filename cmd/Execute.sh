@@ -29,14 +29,19 @@ done
 read -p "仮想ユーザ数: " vus
 echo $vus
 
-k6 run ../test.js --vus $vus
+## k6による負荷テスト
+timestamp=$(date +"%Y%m%d_%H%M%S")
+k6 run ../test.js --vus $vus --summary-export=../../data/summary"_"$timestamp.json
+# --------------------------
 
-cd ..
+## curlで大量にリクエストを送信
+# test.shを実行したい
 
 for num in $(seq 2 $((count + 1)))
 do 
     i=$((num - 2)) 
     echo "Cluster$i" 
     timestamp=$(date +"%Y%m%d_%H%M%S")
-    curl -X GET 114.51.4.$num:8002 -o ./log/Cluster$i"_"$timestamp.csv
+    # 現在のディレクトリとは離れたところにデータを残す
+    curl -X GET 114.51.4.$num:8002 -o ../../data/Cluster$i"_"$timestamp.csv
 done

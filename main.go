@@ -10,7 +10,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math"
-	// "math/rand"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"strconv"
 	"sync"
 	"time"
 
@@ -51,10 +52,13 @@ type LoadBalancer struct {
 }
 
 type Response struct {
-	TotalQueue int `json:"total_queue"`
-	CurrentQueue []int `json:"current_queue"`
-	Data []int `json:"data"`
-	Weight []int `json:"weight"`
+	TotalQueue int
+	CurrentQueue []int
+	Data []int
+	Weight []int
+	Feedback int
+	Threshold int
+	Kappa float64
 }
 
 type server struct {
@@ -80,8 +84,6 @@ var (
 	my_clusterLB string
 	queue        int // 処理待ちTCPセッション数
 	currentIndex int
-	currentAdjacent int
-	temp int
 	wg           sync.WaitGroup
 	mutex        sync.RWMutex
 
@@ -261,8 +263,7 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if queue > threshold {
-		// Calculate関数で計算した値を転送するリクエスト数
-		// 新規リクエストに対して隣接LBに割り当て
+		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
 		randomIndex = WeightedRoundRobin_AdjacentLB()
 		proxyURL.Host = randomIndex.IP + tcp_port
 	} else {
@@ -270,10 +271,10 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		proxyURL.Host = randomIndex.IP + dst_port
 	}
 
-	fmt.Println(queue)
+	// fmt.Println(queue)
 
 	// デバック用(選択されたIPアドレスの確認)
-	fmt.Println("Selected IP:", randomIndex, proxyURL)
+	// fmt.Println("Selected IP:", randomIndex, proxyURL)
 
 	// レスポンスを書き換える
 	modifier := func(res *http.Response) error {
@@ -282,6 +283,9 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		mutex.Unlock()
 		return nil
 	}
+
+	// レスポンス返却までに遅延を設定?
+	// time.Sleep(time.Duration(feedback) * time.Millisecond)
 
 	// make reverse proxy
 	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
@@ -292,8 +296,8 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 
 func dataReceiver(w http.ResponseWriter, r *http.Request) {
 
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Content-Type", "application/json")
+	// w.Header().Set("Access-Control-Allow-Origin", "*")
+	// w.Header().Set("Content-Type", "application/json")
 
 	// 負荷テスト終了後に各パラメータのデータを取得
 	fmt.Printf("total_request: %d\n", total_queue)
@@ -309,7 +313,7 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	clusters := make([]Split_data, len(clusterLBs))
 
 	for i := 0; i < len(data); i++ {
-		clusterIndex := i % 4
+		clusterIndex := i % len(clusterLBs)
 		clusters[clusterIndex].Data = append(clusters[clusterIndex].Data, data[i])
 		clusters[clusterIndex].Weight = append(clusters[clusterIndex].Weight, weight[i])
 	}
@@ -319,97 +323,141 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 		CurrentQueue: current_queue,
 		Data: data,
 		Weight: weight,
+		Feedback: feedback,
+		Threshold: threshold,
+		Kappa: kappa,
 	}
 
-	fmt.Println(response)
-
-	for _, cluster := range clusters {
-		fmt.Println(cluster.Data)
-		fmt.Println(cluster.Weight)
-
-		fmt.Fprintf(w, "data: %d ", cluster.Data)
-		fmt.Fprintf(w, "\n")
-		fmt.Fprintf(w, "weight: %d ", cluster.Weight)
-		fmt.Fprintf(w, "\n")
-	}
-
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, "Failed to encode JSON", http.StatusInternalServerError)
-		log.Println(err)
+	// --------
+	filename := "./log/output.csv"
+	file, err := os.Create(filename)
+	if err != nil {
+		fmt.Println("failure creating csv file:", err)
 		return
 	}
+	defer file.Close()
+
+	var csvData strings.Builder
+	header := []string{"CurrentQueue"}
+	for i := 0; i < len(clusterLBs); i++ {
+		header = append(header, fmt.Sprintf("%d_Data", i))
+		header = append(header, fmt.Sprintf("%d_Weight", i))
+	}
+	header = append(header, "TotalQueue")
+	header = append(header, "feedback")
+	header = append(header, "threshold")
+	header = append(header, "kappa")
+	// パラメータが増えた場合はcsv出力としてここで追加する
+	csvData.WriteString(strings.Join(header, ",") + "\n")
+
+	rowCount := len(response.CurrentQueue)
+
+	for i := 0; i < rowCount; i++ {
+		record := []string{fmt.Sprint(response.CurrentQueue[i])}
+
+		for j := 0; j < len(clusterLBs); j++ {
+			if i < len(clusters[j].Data) {
+				record = append(record, strconv.Itoa(clusters[j].Data[i]))
+			} else {
+				record = append(record, "0") // データがない場合は0を挿入
+			}
+
+			if i < len(clusters[j].Weight) {
+				record = append(record, strconv.Itoa(clusters[j].Weight[i]))
+			} else {
+				record = append(record, "0") // ウェイトがない場合は0を挿入
+			}
+		}
+
+		// TotalQueueを最初の行にのみ追加
+		if i == 0 {
+			record = append(record, strconv.Itoa(response.TotalQueue))
+			record = append(record, strconv.Itoa(response.Feedback))
+			record = append(record, strconv.Itoa(response.Threshold))
+			record = append(record, strconv.FormatFloat(response.Kappa, 'f', -1, 64))
+		} else {
+			record = append(record, "") // それ以外の行には空白を挿入
+			record = append(record, "")
+			record = append(record, "")
+			record = append(record, "")
+		}
+
+		csvData.WriteString(strings.Join(record, ",") + "\n") 
+	}
+
+	_, err = file.WriteString(csvData.String())
+	if err != nil {
+		fmt.Println("Error writing to CSV file:", err)
+		return
+	}
+	// --------
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+
+	http.ServeFile(w, r, filename)
 
 	final = true
 	// os.Exit(1)
 } 
 
+// ウェイトのスライスをカンマ区切りの文字列に変換するヘルパー関数
+func joinWeight(weight []int) string {
+	var result strings.Builder
+	for i, w := range weight {
+		if i > 0 {
+			result.WriteString(",")
+		}
+		result.WriteString(strconv.Itoa(w))
+	}
+	return result.String()
+}
+
 // クラスタ間の重みづけラウンドロビン(隣接LBへの振り分け)
 func WeightedRoundRobin_AdjacentLB() Server {
-	if len(clusterLBs) == 0 {
-		return Server{}
-	}
-
 	// 重みは動的に変化した値を取得
 	mutex.RLock()
 	defer mutex.RUnlock()
 
-	// totalWeight := 0
-	// for _, server := range clusterLBs {
-	// 	if !server.IsHealthy {
-	// 		server.weight = 0
-	// 	}
-
-	// 	totalWeight += server.weight
-	// }
-
-	for {
-		currentServer := clusterLBs[currentAdjacent]
-
-		if currentServer.weight == 0 {
-			currentAdjacent = (currentAdjacent + 1) % len(clusterLBs)
-			temp = 0
-			continue
+	totalWeight := 0
+	transport_list := 0
+	for _, server := range clusterLBs {
+		if !server.IsHealthy {
+			server.weight = 0
 		}
 
-		if temp < currentServer.weight {
-			temp++
-			currentServer.transport++
-			return Server{
-				IP:     currentServer.Address,
-				Weight: currentServer.weight,
-			}
-		} else {
-			temp = 0
-			if currentServer.weight > 0 {
-				currentAdjacent = (currentAdjacent + 1) % len(clusterLBs)
-			}
-		}
+		transport_list++
+		totalWeight += server.weight
 	}
 
 	// すべての重みが0の場合(どこの隣接LBも空いていないとき)
-	// if totalWeight == 0 {
-	// 	return Server{}
+	if totalWeight == 0 {
+		return RoundRobin_Backend()
+	}
+
+	// 0からtotalWeight-1までの乱数を生成
+	rand.Seed(time.Now().UnixNano())
+	randomWeight := rand.Intn(totalWeight)
+
+	// randomWeightが0の場合、再度乱数を生成
+	// for randomWeight == 0 {
+	// 	randomWeight = rand.Intn(totalWeight)
 	// }
 
-	// // 0からtotalWeight-1までの乱数を生成
-	// rand.Seed(time.Now().UnixNano())
-	// randomWeight := rand.Intn(totalWeight)
-
-	// fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
-	// // 重みでサーバーを選択
-	// for i, server := range clusterLBs {
-	// 	if randomWeight < server.weight {
-	// 		clusterLBs[i].transport++
-	// 		return Server{
-	// 			IP:     server.Address,
-	// 			Weight: server.weight,
-	// 		}
-	// 	}
-	// 	randomWeight -= server.weight
-	// }
+	//fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
+	// 重みでサーバーを選択
+	for i, server := range clusterLBs {
+		if randomWeight < server.weight && server.IsHealthy {
+			clusterLBs[i].transport++
+			return Server{
+				IP:     server.Address,
+				Weight: server.weight,
+			}
+		}
+		randomWeight -= server.weight
+	}
 
 	// ここには到達しないはずだが、デフォルトで最初のサーバーを返す
-	// return Server{}
+	return Server{}
 }
 
 // クラスタ内でのラウンドロビン(バックエンドサーバへの振り分け)
@@ -438,7 +486,7 @@ func gRPC_Server() {
 
 // 隣接LBへのヘルスチェック
 func (s *server) GetBackendStatus(ctx context.Context, req *pb.BackendRequest) (*pb.BackendStatus, error) {
-	fmt.Printf("Received health check request for server: %s\n", req.ServerName)
+	//fmt.Printf("Received health check request for server: %s\n", req.ServerName)
 	return &pb.BackendStatus{IsHealthy: true}, nil
 }
 
@@ -551,7 +599,7 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 		mutex.Lock()
 		clusterLBs[num].data = int(in.Payload)
 
-		fmt.Println(clusterLBs[num].data, clusterLBs)
+		//fmt.Println(clusterLBs[num].data, clusterLBs)
 		Calculate(clusterLBs[num].data, num)
 		mutex.Unlock()
 	}

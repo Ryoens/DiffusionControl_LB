@@ -270,10 +270,10 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		proxyURL.Host = randomIndex.IP + dst_port
 	}
 
-	fmt.Println(queue)
+	// fmt.Println(queue)
 
 	// デバック用(選択されたIPアドレスの確認)
-	fmt.Println("Selected IP:", randomIndex, proxyURL)
+	// fmt.Println("Selected IP:", randomIndex, proxyURL)
 
 	// レスポンスを書き換える
 	modifier := func(res *http.Response) error {
@@ -284,7 +284,7 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// レスポンス返却までに遅延を設定?
-
+	// time.Sleep(time.Duration(feedback) * time.Millisecond)
 
 	// make reverse proxy
 	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
@@ -294,10 +294,6 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func dataReceiver(w http.ResponseWriter, r *http.Request) {
-
-	// w.Header().Set("Access-Control-Allow-Origin", "*")
-	// w.Header().Set("Content-Type", "application/json")
-
 	// 負荷テスト終了後に各パラメータのデータを取得
 	fmt.Printf("total_request: %d\n", total_queue)
 	fmt.Printf("queue_transition: %d\n", current_queue)
@@ -435,7 +431,12 @@ func WeightedRoundRobin_AdjacentLB() Server {
 	rand.Seed(time.Now().UnixNano())
 	randomWeight := rand.Intn(totalWeight)
 
-	fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
+	// randomWeightが0の場合、再度乱数を生成
+	// for randomWeight == 0 {
+	// 	randomWeight = rand.Intn(totalWeight)
+	// }
+
+	//fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
 	// 重みでサーバーを選択
 	for i, server := range clusterLBs {
 		if randomWeight < server.weight {
@@ -478,7 +479,7 @@ func gRPC_Server() {
 
 // 隣接LBへのヘルスチェック
 func (s *server) GetBackendStatus(ctx context.Context, req *pb.BackendRequest) (*pb.BackendStatus, error) {
-	fmt.Printf("Received health check request for server: %s\n", req.ServerName)
+	//fmt.Printf("Received health check request for server: %s\n", req.ServerName)
 	return &pb.BackendStatus{IsHealthy: true}, nil
 }
 
@@ -591,7 +592,7 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 		mutex.Lock()
 		clusterLBs[num].data = int(in.Payload)
 
-		fmt.Println(clusterLBs[num].data, clusterLBs)
+		//fmt.Println(clusterLBs[num].data, clusterLBs)
 		Calculate(clusterLBs[num].data, num)
 		mutex.Unlock()
 	}
