@@ -10,7 +10,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math"
-	"math/rand"
+	// "math/rand"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -419,45 +419,37 @@ func WeightedRoundRobin_AdjacentLB() Server {
 	defer mutex.RUnlock()
 
 	totalWeight := 0
-	transport_list := 0
-	for _, server := range clusterLBs {
-		if !server.IsHealthy {
-			server.weight = 0
-		}
+	nextIndex := -1
 
-		transport_list++
+	// 各サーバーの重みとヘルス状態を確認
+	for i, server := range clusterLBs {
+		if !server.IsHealthy || server.data > threshold {
+			// サーバーが不健康なら重みを0に設定
+		    server.weight = 0
+		}
+		// サーバーの重みを加算
 		totalWeight += server.weight
+
+		// 次に振り分けるサーバーを順に決定
+		if server.weight > 0 {
+			if nextIndex == -1 || clusterLBs[i].transport < clusterLBs[nextIndex].transport {
+				nextIndex = i
+			}
+		}
 	}
 
 	// すべての重みが0の場合(どこの隣接LBも空いていないとき)
 	if totalWeight == 0 {
+		// すべてのサーバーが利用不可の場合、デフォルト処理にフォールバック
 		return RoundRobin_Backend()
 	}
 
-	// 0からtotalWeight-1までの乱数を生成
-	rand.Seed(time.Now().UnixNano())
-	randomWeight := rand.Intn(totalWeight)
-
-	// randomWeightが0の場合、再度乱数を生成
-	// for randomWeight == 0 {
-	// 	randomWeight = rand.Intn(totalWeight)
-	// }
-
-	//fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
-	// 重みでサーバーを選択
-	for i, server := range clusterLBs {
-		if randomWeight < server.weight && server.IsHealthy {
-			clusterLBs[i].transport++
-			return Server{
-				IP:     server.Address,
-				Weight: server.weight,
-			}
-		}
-		randomWeight -= server.weight
+	// 選ばれたサーバーにトラフィックを送信
+	clusterLBs[nextIndex].transport++
+	return Server{
+		IP:     clusterLBs[nextIndex].Address,
+		Weight: clusterLBs[nextIndex].weight,
 	}
-
-	// ここには到達しないはずだが、デフォルトで最初のサーバーを返す
-	return Server{}
 }
 
 // クラスタ内でのラウンドロビン(バックエンドサーバへの振り分け)

@@ -5,8 +5,9 @@ count=0
 read -p "feedback: " feedback
 read -p "threshold: " threshold
 read -p "kappa: " kappa
+read -p "file: " file
 
-echo $feedback $threshold $kappa
+echo $feedback $threshold $kappa $file
 
 echo "-------- parameter OK --------"
 
@@ -16,11 +17,11 @@ KEY=${container:7:1}
 
 echo "number of clusters: " $KEY
 
-# go run mirror.go -t $feedback -q $threshold -k $kappa
+# go run $file -t $feedback -q $threshold -k $kappa
 # プログラムの実行
 while [ $count -le $KEY ]
 do
-    docker exec -d Cluster${count}_LB go run mirror.go -t $feedback -q $threshold -k $kappa &
+    docker exec -d Cluster${count}_LB go run $file -t $feedback -q $threshold -k $kappa &
     docker exec Cluster${count}_LB ps aux
     count=`expr $count + 1`
 done
