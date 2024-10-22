@@ -18,11 +18,11 @@ KEY=${container:7:1}
 echo "number of clusters: " $KEY
 
 # go run $file -t $feedback -q $threshold -k $kappa
-# プログラムの実行
+# プログラムの実行 (gRPCが起動しない場合の挙動も必要) -> 仮想ブリッジの問題
 while [ $count -le $KEY ]
 do
     docker exec -d Cluster${count}_LB go run $file -t $feedback -q $threshold -k $kappa &
-    docker exec Cluster${count}_LB ps aux
+    docker exec Cluster${count}_LB ps aux # goのプロセスが走っていなかったらやり直しにしたい
     count=`expr $count + 1`
 done
 
