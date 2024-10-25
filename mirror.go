@@ -232,7 +232,7 @@ func main(){
 
 func getData() {
 	for {
-		fmt.Println("loop")
+		//fmt.Println("loop")
 
 		if final {
 			os.Exit(1)
@@ -245,7 +245,8 @@ func getData() {
 			weight = append(weight, server.weight)
 		}
 
-		time.Sleep(time.Duration(sleep_time) * time.Second)
+		time.Sleep(time.Duration(feedback) * time.Millisecond) // ms
+		// time.Sleep(time.Duration(sleep_time) * time.Second) // s
 	}
 }
 
@@ -424,7 +425,7 @@ func WeightedRoundRobin_AdjacentLB() Server {
 
 	// すべての重みが0の場合(どこの隣接LBも空いていないとき)
 	if totalWeight == 0 {
-		return Server{}
+		return RoundRobin_Backend()
 	}
 
 	// 0からtotalWeight-1までの乱数を生成
@@ -450,7 +451,7 @@ func WeightedRoundRobin_AdjacentLB() Server {
 	}
 
 	// ここには到達しないはずだが、デフォルトで最初のサーバーを返す
-	return Server{}
+	return RoundRobin_Backend()
 }
 
 // クラスタ内でのラウンドロビン(バックエンドサーバへの振り分け)
@@ -486,7 +487,7 @@ func (s *server) GetBackendStatus(ctx context.Context, req *pb.BackendRequest) (
 // 隣接LBへの制御情報の送信
 func (s *server) ControlStream(stream pb.LoadBalancer_ControlStreamServer) error {
 	for {
-		in, err := stream.Recv()
+		_, err := stream.Recv()
 		if err == io.EOF {
 			return nil
 		}
@@ -494,7 +495,7 @@ func (s *server) ControlStream(stream pb.LoadBalancer_ControlStreamServer) error
 			log.Printf("Error receiving control message: %v", err)
 			return err
 		}
-		log.Printf("Received control command: %s, TCP Waiting Sessions: %d", in.Command, queue)
+		// log.Printf("Received control command: %s, TCP Waiting Sessions: %d", in.Command, queue)
 
 		// 現在の制御情報をクライアントに送信
 		if err := stream.Send(&pb.ControlResponse{Status: "ok", Payload: int64(queue)}); err != nil {
@@ -515,7 +516,7 @@ func healthCheck(client pb.LoadBalancerClient, adjacent_lb string) bool {
 		return false
 	}
 
-	log.Printf("Server %s is healthy, starting control stream...", adjacent_lb)
+	// log.Printf("Server %s is healthy, starting control stream...", adjacent_lb)
 	return true
 }
 
@@ -565,7 +566,7 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 	for range ticker.C {
 		// 制御情報の送信
 		if err := stream.Send(&pb.ControlMessage{Command: "update_policy", Payload: int64(queue)}); err != nil {
-			log.Printf("Error sending control message: %v", err)
+			// log.Printf("Error sending control message: %v", err)
 			clusterLBs[num].IsHealthy = false
 
 			if status.Code(err) == codes.Canceled || status.Code(err) == codes.Unavailable {
@@ -587,7 +588,7 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 			}
 			return
 		}
-		log.Printf("Received control response: %d", in.Payload)
+		// log.Printf("Received control response: %d", in.Payload)
 
 		mutex.Lock()
 		clusterLBs[num].data = int(in.Payload)

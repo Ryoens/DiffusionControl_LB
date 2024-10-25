@@ -5,9 +5,8 @@ count=0
 read -p "feedback: " feedback
 read -p "threshold: " threshold
 read -p "kappa: " kappa
-read -p "file: " file
 
-echo $feedback $threshold $kappa $file
+echo $feedback $threshold $kappa
 
 echo "-------- parameter OK --------"
 
@@ -21,7 +20,7 @@ echo "number of clusters: " $KEY
 # プログラムの実行 (gRPCが起動しない場合の挙動も必要) -> 仮想ブリッジの問題
 while [ $count -le $KEY ]
 do
-    docker exec -d Cluster${count}_LB go run $file -t $feedback -q $threshold -k $kappa &
+    docker exec -d Cluster${count}_LB go run mirror.go -t $feedback -q $threshold -k $kappa &
     docker exec Cluster${count}_LB ps aux # goのプロセスが走っていなかったらやり直しにしたい
     count=`expr $count + 1`
 done
@@ -32,6 +31,9 @@ echo $vus
 
 ## k6による負荷テスト
 timestamp=$(date +"%Y%m%d_%H%M%S")
+mpstat -P 1-9 1 60 | awk -v OFS=',' \
+'BEGIN {print "Timestamp","CPU","%user","%nice","%system","%iowait","%irq","%soft","%steal","%idle"} 
+NR>4 {print strftime("%H:%M:%S"), $3, $4, $5, $6, $7, $8, $9, $10, $NF}' > ../../data/cpu_usage_${timestamp}.csv &
 k6 run ../test.js --vus $vus --summary-export=../../data/summary"_"$timestamp.json
 # --------------------------
 
