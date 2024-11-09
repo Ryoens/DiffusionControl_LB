@@ -45,9 +45,10 @@ do
 
     ## k6による負荷テスト
     timestamp=$(date +"%Y%m%d_%H%M%S")
-    mpstat -P 0-9 1 60 | awk -v OFS=',' \
-    'BEGIN {print "Timestamp","CPU","%user","%nice","%system","%iowait","%irq","%soft","%steal","%idle"} 
-    NR>4 {print strftime("%H:%M:%S"), $3, $4, $5, $6, $7, $8, $9, $10, $NF}' > "${data_dir}/cpu_usage_${timestamp}.csv" &
+    # コアごとのCPU使用率取得 (未使用)
+    # mpstat -P 0-9 1 60 | awk -v OFS=',' \
+    # 'BEGIN {print "Timestamp","CPU","%user","%nice","%system","%iowait","%irq","%soft","%steal","%idle"} 
+    # NR>4 {print strftime("%H:%M:%S"), $3, $4, $5, $6, $7, $8, $9, $10, $NF}' > "${data_dir}/cpu_usage_${timestamp}.csv" &
     k6 run ../test.js --vus $vus --summary-export="${data_dir}/summary"_"$timestamp.json"
     # --------------------------
 
@@ -75,4 +76,4 @@ echo "feedback: $feedback [ms]"
 echo "threshold: $threshold"
 echo "kappa: $kappa"
 echo "virtual users: $vus [users]"
-} > "${data_dir}/parameters"_"$timestamp"
+} > "${data_dir}/parameters"_"$timestamp".txt

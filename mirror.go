@@ -51,8 +51,9 @@ type LoadBalancer struct {
 }
 
 type Response struct {
-	TotalQueue int
+	TotalQueue []int
 	CurrentQueue []int
+	CurrentResponse []int
 	Data []int
 	Weight []int
 	Feedback int
@@ -82,15 +83,19 @@ var (
 	randomIndex  Server
 	my_clusterLB string
 	queue        int // 処理待ちTCPセッション数
+	res_count    int // レスポンス返却した数をカウント	
 	currentIndex int
 	wg           sync.WaitGroup
 	mutex        sync.RWMutex
 
 	// 評価用パラメータ
 	total_queue int
+	total_data []int
 	current_queue []int
 	data []int
 	weight []int
+
+	current_response []int
 
 	final bool
 	feedback int
@@ -104,7 +109,8 @@ const (
 	sub_port   string  = ":8002"
 	dst_port   string  = ":80"    // webサーバ用
 	grpc_dest  string  = ":50051" // gRPCで使用
-	sleep_time int     = 1
+	sleep_time time.Duration = 1
+	getdata_time time.Duration = 100
 )
 
 func init() {
@@ -238,14 +244,16 @@ func getData() {
 			os.Exit(1)
 		}
 
+		total_data = append(total_data, total_queue)
 		current_queue = append(current_queue, queue)
+		current_response = append(current_response, res_count)
 
 		for _, server := range clusterLBs {
 			data = append(data, server.data)
 			weight = append(weight, server.weight)
 		}
 
-		time.Sleep(time.Duration(feedback) * time.Millisecond) // ms
+		time.Sleep(getdata_time * time.Millisecond) // ms
 		// time.Sleep(time.Duration(sleep_time) * time.Second) // s
 	}
 }
@@ -268,6 +276,7 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		proxyURL.Host = randomIndex.IP + tcp_port
 	} else {
 		randomIndex = RoundRobin_Backend()
+		randomIndex.Sessions++
 		proxyURL.Host = randomIndex.IP + dst_port
 	}
 
@@ -280,6 +289,7 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 	modifier := func(res *http.Response) error {
 		mutex.Lock()
 		queue-- // 処理完了後にデクリメント
+		res_count++ 
 		mutex.Unlock()
 		return nil
 	}
@@ -295,6 +305,10 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func dataReceiver(w http.ResponseWriter, r *http.Request) {
+	// 現在のセッション数を取得
+	// last_sessions := queue
+	// last_response := res_count
+	
 	// 負荷テスト終了後に各パラメータのデータを取得
 	fmt.Printf("total_request: %d\n", total_queue)
 	fmt.Printf("queue_transition: %d\n", current_queue)
@@ -315,8 +329,9 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := Response{
-		TotalQueue: total_queue,
+		TotalQueue: total_data,
 		CurrentQueue: current_queue,
+		CurrentResponse: current_response,
 		Data: data,
 		Weight: weight,
 		Feedback: feedback,
@@ -335,11 +350,12 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 
 	var csvData strings.Builder
 	header := []string{"CurrentQueue"}
+	header = append(header, "CurrentResponse")
+	header = append(header, "TotalQueue")
 	for i := 0; i < len(clusterLBs); i++ {
 		header = append(header, fmt.Sprintf("%d_Data", i))
 		header = append(header, fmt.Sprintf("%d_Weight", i))
 	}
-	header = append(header, "TotalQueue")
 	header = append(header, "feedback")
 	header = append(header, "threshold")
 	header = append(header, "kappa")
@@ -350,6 +366,9 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 
 	for i := 0; i < rowCount; i++ {
 		record := []string{fmt.Sprint(response.CurrentQueue[i])}
+		record = append(record, strconv.Itoa(response.CurrentResponse[i]))
+		record = append(record, strconv.Itoa(response.TotalQueue[i]))
+		// record = []string{fmt.Sprint(response.CurrentResponse[i])}
 
 		for j := 0; j < len(clusterLBs); j++ {
 			if i < len(clusters[j].Data) {
@@ -367,13 +386,11 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 
 		// TotalQueueを最初の行にのみ追加
 		if i == 0 {
-			record = append(record, strconv.Itoa(response.TotalQueue))
 			record = append(record, strconv.Itoa(response.Feedback))
 			record = append(record, strconv.Itoa(response.Threshold))
 			record = append(record, strconv.FormatFloat(response.Kappa, 'f', -1, 64))
 		} else {
 			record = append(record, "") // それ以外の行には空白を挿入
-			record = append(record, "")
 			record = append(record, "")
 			record = append(record, "")
 		}
@@ -456,6 +473,7 @@ func WeightedRoundRobin_AdjacentLB() Server {
 
 // クラスタ内でのラウンドロビン(バックエンドサーバへの振り分け)
 func RoundRobin_Backend() Server {
+	// proxyIPs[currentIndex].Sessions++
 	list := proxyIPs[currentIndex]
 	currentIndex = (currentIndex + 1) % len(proxyIPs)
 
