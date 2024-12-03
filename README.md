@@ -15,13 +15,17 @@ NW上の拡散方程式を使用することでLB間のリクエストを平滑�
 
 ### 実行方法
 環境構築
+
 `apt install curl go protobuf-compiler k6`
 
 コンテナの実行
+
 `make build [コンテナ数]`
 
 プログラムの実行
+
 `make exec`
 
 コンテナの削除
-`make destroy [コンテナ名]`
+
+`make destroy [コンテナ数]`
