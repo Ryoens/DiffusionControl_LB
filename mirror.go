@@ -56,6 +56,7 @@ type Response struct {
 	CurrentResponse []int
 	Data []int
 	Weight []int
+	WebResponse []int
 	Feedback int
 	Threshold int
 	Kappa float64
@@ -88,6 +89,8 @@ var (
 	wg           sync.WaitGroup
 	mutex        sync.RWMutex
 
+	web_count int
+
 	// 評価用パラメータ
 	total_queue int
 	total_data []int
@@ -96,6 +99,7 @@ var (
 	weight []int
 
 	current_response []int
+	web_response []int
 
 	final bool
 	feedback int
@@ -247,6 +251,7 @@ func getData() {
 		total_data = append(total_data, total_queue)
 		current_queue = append(current_queue, queue)
 		current_response = append(current_response, res_count)
+		web_response = append(web_response, web_count)
 
 		for _, server := range clusterLBs {
 			data = append(data, server.data)
@@ -276,7 +281,7 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		proxyURL.Host = randomIndex.IP + tcp_port
 	} else {
 		randomIndex = RoundRobin_Backend()
-		randomIndex.Sessions++
+		web_count++
 		proxyURL.Host = randomIndex.IP + dst_port
 	}
 
@@ -334,6 +339,7 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 		CurrentResponse: current_response,
 		Data: data,
 		Weight: weight,
+		WebResponse: web_response,
 		Feedback: feedback,
 		Threshold: threshold,
 		Kappa: kappa,
@@ -356,6 +362,7 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 		header = append(header, fmt.Sprintf("%d_Data", i))
 		header = append(header, fmt.Sprintf("%d_Weight", i))
 	}
+	header = append(header, "WebResponse")
 	header = append(header, "feedback")
 	header = append(header, "threshold")
 	header = append(header, "kappa")
@@ -383,6 +390,8 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 				record = append(record, "0") // ウェイトがない場合は0を挿入
 			}
 		}
+
+		record = append(record, strconv.Itoa(response.WebResponse[i]))
 
 		// TotalQueueを最初の行にのみ追加
 		if i == 0 {
