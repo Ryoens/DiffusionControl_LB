@@ -1,4 +1,5 @@
-// 提案手法のシーケンスを変更する
+// 閾値 -> 隣接間の差分
+
 package main
 
 import (
@@ -10,7 +11,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math"
-	// "math/rand"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -52,13 +53,12 @@ type LoadBalancer struct {
 }
 
 type Response struct {
-	TotalQueue int
+	TotalQueue []int
 	CurrentQueue []int
+	CurrentResponse []int
 	Data []int
 	Weight []int
-	Feedback int
-	Threshold int
-	Kappa float64
+	WebResponse []int
 }
 
 type server struct {
@@ -83,19 +83,25 @@ var (
 	randomIndex  Server
 	my_clusterLB string
 	queue        int // 処理待ちTCPセッション数
+	res_count    int // レスポンス返却した数をカウント	
 	currentIndex int
 	wg           sync.WaitGroup
 	mutex        sync.RWMutex
 
+	web_count int
+
 	// 評価用パラメータ
 	total_queue int
+	total_data []int
 	current_queue []int
 	data []int
 	weight []int
 
+	current_response []int
+	web_response []int
+
 	final bool
 	feedback int
-	threshold int
 	kappa float64
 )
 
@@ -105,22 +111,20 @@ const (
 	sub_port   string  = ":8002"
 	dst_port   string  = ":80"    // webサーバ用
 	grpc_dest  string  = ":50051" // gRPCで使用
-	sleep_time int     = 1
+	sleep_time time.Duration = 1
+	getdata_time time.Duration = 100
 )
 
 func init() {
 	// 引数の取得
 	t := flag.Int("t", 0, "feedback information")
-	q := flag.Int("q", 0, "threshold")
 	k := flag.Float64("k", 0.0, "diffusion coefficient")
 
 	flag.Parse()
 	feedback = *t
-    threshold = *q
     kappa = *k
 
 	fmt.Printf("feedback -t : %d\n", feedback)
-    fmt.Printf("threshold -q : %d\n", threshold)
     fmt.Printf("kappa -k : %.2f\n", kappa)
 
 	// JSONファイルを開く
@@ -233,25 +237,30 @@ func main(){
 
 func getData() {
 	for {
-		fmt.Println("loop")
+		//fmt.Println("loop")
 
 		if final {
 			os.Exit(1)
 		}
 
+		total_data = append(total_data, total_queue)
 		current_queue = append(current_queue, queue)
+		current_response = append(current_response, res_count)
+		web_response = append(web_response, web_count)
 
 		for _, server := range clusterLBs {
 			data = append(data, server.data)
 			weight = append(weight, server.weight)
 		}
 
-		time.Sleep(time.Duration(sleep_time) * time.Second)
+		time.Sleep(getdata_time * time.Millisecond) // ms
+		// time.Sleep(time.Duration(sleep_time) * time.Second) // s
 	}
 }
 
 // リクエストをweighted RRで処理
 func lbHandler(w http.ResponseWriter, r *http.Request) {
+	flag := false
 	mutex.Lock()
 	total_queue++
 	queue++ // 処理待ちセッション数をインクリメント
@@ -262,15 +271,33 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		Host:   "",
 	}
 
-	if queue > threshold {
+	// if queue > threshold {
+	// 	// Calculate関数で計算した値を該当IPアドレスの重みとして指定
+	// 	randomIndex = WeightedRoundRobin_AdjacentLB()
+	// 	proxyURL.Host = randomIndex.IP + tcp_port
+	// } else {
+	// 	randomIndex = RoundRobin_Backend()
+	// 	web_count++
+	// 	proxyURL.Host = randomIndex.IP + dst_port
+	// }
+	
+	// 隣接LB間のセッション数の差分 -> weightが0でないかどうか
+	for _, info := range clusterLBs {
+		if info.weight > 0 {
+			flag = true
+			break
+		}
+	}
+
+	if flag {
 		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
 		randomIndex = WeightedRoundRobin_AdjacentLB()
 		proxyURL.Host = randomIndex.IP + tcp_port
 	} else {
 		randomIndex = RoundRobin_Backend()
+		web_count++
 		proxyURL.Host = randomIndex.IP + dst_port
 	}
-
 	// fmt.Println(queue)
 
 	// デバック用(選択されたIPアドレスの確認)
@@ -280,6 +307,7 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 	modifier := func(res *http.Response) error {
 		mutex.Lock()
 		queue-- // 処理完了後にデクリメント
+		res_count++ 
 		mutex.Unlock()
 		return nil
 	}
@@ -295,10 +323,10 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func dataReceiver(w http.ResponseWriter, r *http.Request) {
-
-	// w.Header().Set("Access-Control-Allow-Origin", "*")
-	// w.Header().Set("Content-Type", "application/json")
-
+	// 現在のセッション数を取得
+	// last_sessions := queue
+	// last_response := res_count
+	
 	// 負荷テスト終了後に各パラメータのデータを取得
 	fmt.Printf("total_request: %d\n", total_queue)
 	fmt.Printf("queue_transition: %d\n", current_queue)
@@ -319,13 +347,12 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := Response{
-		TotalQueue: total_queue,
+		TotalQueue: total_data,
 		CurrentQueue: current_queue,
+		CurrentResponse: current_response,
 		Data: data,
 		Weight: weight,
-		Feedback: feedback,
-		Threshold: threshold,
-		Kappa: kappa,
+		WebResponse: web_response,
 	}
 
 	// --------
@@ -339,13 +366,14 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 
 	var csvData strings.Builder
 	header := []string{"CurrentQueue"}
+	header = append(header, "CurrentResponse")
+	header = append(header, "TotalQueue")
 	for i := 0; i < len(clusterLBs); i++ {
 		header = append(header, fmt.Sprintf("%d_Data", i))
 		header = append(header, fmt.Sprintf("%d_Weight", i))
 	}
-	header = append(header, "TotalQueue")
+	header = append(header, "WebResponse")
 	header = append(header, "feedback")
-	header = append(header, "threshold")
 	header = append(header, "kappa")
 	// パラメータが増えた場合はcsv出力としてここで追加する
 	csvData.WriteString(strings.Join(header, ",") + "\n")
@@ -354,6 +382,9 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 
 	for i := 0; i < rowCount; i++ {
 		record := []string{fmt.Sprint(response.CurrentQueue[i])}
+		record = append(record, strconv.Itoa(response.CurrentResponse[i]))
+		record = append(record, strconv.Itoa(response.TotalQueue[i]))
+		// record = []string{fmt.Sprint(response.CurrentResponse[i])}
 
 		for j := 0; j < len(clusterLBs); j++ {
 			if i < len(clusters[j].Data) {
@@ -369,18 +400,7 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// TotalQueueを最初の行にのみ追加
-		if i == 0 {
-			record = append(record, strconv.Itoa(response.TotalQueue))
-			record = append(record, strconv.Itoa(response.Feedback))
-			record = append(record, strconv.Itoa(response.Threshold))
-			record = append(record, strconv.FormatFloat(response.Kappa, 'f', -1, 64))
-		} else {
-			record = append(record, "") // それ以外の行には空白を挿入
-			record = append(record, "")
-			record = append(record, "")
-			record = append(record, "")
-		}
+		record = append(record, strconv.Itoa(response.WebResponse[i]))
 
 		csvData.WriteString(strings.Join(record, ",") + "\n") 
 	}
@@ -419,41 +439,48 @@ func WeightedRoundRobin_AdjacentLB() Server {
 	defer mutex.RUnlock()
 
 	totalWeight := 0
-	nextIndex := -1
-
-	// 各サーバーの重みとヘルス状態を確認
-	for i, server := range clusterLBs {
-		if !server.IsHealthy || server.data > threshold {
-			// サーバーが不健康なら重みを0に設定
-		    server.weight = 0
+	for _, server := range clusterLBs {
+		if !server.IsHealthy {
+			server.weight = 0
 		}
-		// サーバーの重みを加算
+
 		totalWeight += server.weight
-
-		// 次に振り分けるサーバーを順に決定
-		if server.weight > 0 {
-			if nextIndex == -1 || clusterLBs[i].transport < clusterLBs[nextIndex].transport {
-				nextIndex = i
-			}
-		}
 	}
 
 	// すべての重みが0の場合(どこの隣接LBも空いていないとき)
 	if totalWeight == 0 {
-		// すべてのサーバーが利用不可の場合、デフォルト処理にフォールバック
 		return RoundRobin_Backend()
 	}
 
-	// 選ばれたサーバーにトラフィックを送信
-	clusterLBs[nextIndex].transport++
-	return Server{
-		IP:     clusterLBs[nextIndex].Address,
-		Weight: clusterLBs[nextIndex].weight,
+	// 0からtotalWeight-1までの乱数を生成
+	rand.Seed(time.Now().UnixNano())
+	randomWeight := rand.Intn(totalWeight)
+
+	// randomWeightが0の場合、再度乱数を生成
+	// for randomWeight == 0 {
+	// 	randomWeight = rand.Intn(totalWeight)
+	// }
+
+	//fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
+	// 重みでサーバーを選択
+	for i, server := range clusterLBs {
+		if randomWeight < server.weight {
+			clusterLBs[i].transport++
+			return Server{
+				IP:     server.Address,
+				Weight: server.weight,
+			}
+		}
+		randomWeight -= server.weight
 	}
+
+	// ここには到達しないはずだが、デフォルトで最初のサーバーを返す
+	return RoundRobin_Backend()
 }
 
 // クラスタ内でのラウンドロビン(バックエンドサーバへの振り分け)
 func RoundRobin_Backend() Server {
+	// proxyIPs[currentIndex].Sessions++
 	list := proxyIPs[currentIndex]
 	currentIndex = (currentIndex + 1) % len(proxyIPs)
 
@@ -485,7 +512,7 @@ func (s *server) GetBackendStatus(ctx context.Context, req *pb.BackendRequest) (
 // 隣接LBへの制御情報の送信
 func (s *server) ControlStream(stream pb.LoadBalancer_ControlStreamServer) error {
 	for {
-		in, err := stream.Recv()
+		_, err := stream.Recv()
 		if err == io.EOF {
 			return nil
 		}
@@ -493,7 +520,7 @@ func (s *server) ControlStream(stream pb.LoadBalancer_ControlStreamServer) error
 			log.Printf("Error receiving control message: %v", err)
 			return err
 		}
-		log.Printf("Received control command: %s, TCP Waiting Sessions: %d", in.Command, queue)
+		// log.Printf("Received control command: %s, TCP Waiting Sessions: %d", in.Command, queue)
 
 		// 現在の制御情報をクライアントに送信
 		if err := stream.Send(&pb.ControlResponse{Status: "ok", Payload: int64(queue)}); err != nil {
@@ -514,7 +541,7 @@ func healthCheck(client pb.LoadBalancerClient, adjacent_lb string) bool {
 		return false
 	}
 
-	log.Printf("Server %s is healthy, starting control stream...", adjacent_lb)
+	// log.Printf("Server %s is healthy, starting control stream...", adjacent_lb)
 	return true
 }
 
@@ -564,7 +591,7 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 	for range ticker.C {
 		// 制御情報の送信
 		if err := stream.Send(&pb.ControlMessage{Command: "update_policy", Payload: int64(queue)}); err != nil {
-			log.Printf("Error sending control message: %v", err)
+			// log.Printf("Error sending control message: %v", err)
 			clusterLBs[num].IsHealthy = false
 
 			if status.Code(err) == codes.Canceled || status.Code(err) == codes.Unavailable {
@@ -586,7 +613,7 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 			}
 			return
 		}
-		log.Printf("Received control response: %d", in.Payload)
+		// log.Printf("Received control response: %d", in.Payload)
 
 		mutex.Lock()
 		clusterLBs[num].data = int(in.Payload)
