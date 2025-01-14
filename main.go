@@ -1,5 +1,4 @@
-// 閾値 -> 隣接間の差分
-
+// 隣接間のセッション差分に基づき転送先を指定
 package main
 
 import (
@@ -53,12 +52,13 @@ type LoadBalancer struct {
 }
 
 type Response struct {
-	TotalQueue []int
-	CurrentQueue []int
-	CurrentResponse []int
+	TotalQueue []int // 総リクエスト数
+	CurrentQueue []int // セッション数
+	CurrentResponse []int // レスポンス数
+	CurrentTransport []int // 転送数
 	Data []int
 	Weight []int
-	WebResponse []int
+	Transport []int
 }
 
 type server struct {
@@ -68,6 +68,7 @@ type server struct {
 type Split_data struct {
 	Data []int
 	Weight []int
+	Transport []int
 }
 
 // グローバル変数の定義
@@ -82,25 +83,30 @@ var (
 
 	randomIndex  Server
 	my_clusterLB string
-	queue        int // 処理待ちTCPセッション数
-	res_count    int // レスポンス返却した数をカウント	
-	currentIndex int
+	currentIndex int // RR方式におけるインデックス
 	wg           sync.WaitGroup
 	mutex        sync.RWMutex
 
-	web_count int
-
 	// 評価用パラメータ
-	total_queue int
-	total_data []int
+	queue        int // 処理待ちTCPセッション数
+	total_queue int // LBに入ってきた全てのリクエスト
+	res_count    int // レスポンス返却した数をカウント	
+	web_count int // 内部のwebサーバにてレスポンス返却した数
+	current_transport int // リバースプロキシで隣接LBに転送した数
+
+	total_data []int // 
 	current_queue []int
+	current_response []int
+	// web_response []int
+	total_transport []int
+
+	// 隣接LBごとに取得するフィードバック情報
 	data []int
 	weight []int
-
-	current_response []int
-	web_response []int
+	transport []int
 
 	final bool
+	transport_dest bool
 	feedback int
 	kappa float64
 )
@@ -162,6 +168,7 @@ func init() {
 
 	data = make([]int, len(clusterLBs))
 	weight = make([]int, len(clusterLBs))
+	transport = make([]int, len(clusterLBs))
 
 	// 各クラスタのLBのIPアドレスと照合
 	for _, cluster := range clusters {
@@ -246,11 +253,12 @@ func getData() {
 		total_data = append(total_data, total_queue)
 		current_queue = append(current_queue, queue)
 		current_response = append(current_response, res_count)
-		web_response = append(web_response, web_count)
+		total_transport = append(total_transport, current_transport)
 
 		for _, server := range clusterLBs {
 			data = append(data, server.data)
 			weight = append(weight, server.weight)
+			transport = append(transport, server.transport)
 		}
 
 		time.Sleep(getdata_time * time.Millisecond) // ms
@@ -260,7 +268,7 @@ func getData() {
 
 // リクエストをweighted RRで処理
 func lbHandler(w http.ResponseWriter, r *http.Request) {
-	flag := false
+	transport_dest = false
 	mutex.Lock()
 	total_queue++
 	queue++ // 処理待ちセッション数をインクリメント
@@ -271,55 +279,58 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		Host:   "",
 	}
 
-	// if queue > threshold {
-	// 	// Calculate関数で計算した値を該当IPアドレスの重みとして指定
-	// 	randomIndex = WeightedRoundRobin_AdjacentLB()
-	// 	proxyURL.Host = randomIndex.IP + tcp_port
-	// } else {
-	// 	randomIndex = RoundRobin_Backend()
-	// 	web_count++
-	// 	proxyURL.Host = randomIndex.IP + dst_port
+	// // 隣接LB間のセッション数の差分に閾値が入る
+	// temp_weight := 0
+	// for _, info := range clusterLBs {
+	// 	temp_weight = queue - info.data
+	// 	if temp_weight > weight_threshold {
+	// 		new_AdjacentLB = append(new_AdjacentLB, info)
+	// 	}
 	// }
 	
 	// 隣接LB間のセッション数の差分 -> weightが0でないかどうか
 	for _, info := range clusterLBs {
 		if info.weight > 0 {
-			flag = true
+			transport_dest = true
 			break
 		}
 	}
 
-	if flag {
+	// リバースプロキシを作成
+	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
+
+	if  transport_dest {
 		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
 		randomIndex = WeightedRoundRobin_AdjacentLB()
 		proxyURL.Host = randomIndex.IP + tcp_port
+
+		proxy.ModifyResponse = func(res *http.Response) error {
+			mutex.Lock()
+			queue-- // 処理完了後にデクリメント
+			current_transport++
+			mutex.Unlock()
+			return nil
+		}
+		
 	} else {
 		randomIndex = RoundRobin_Backend()
-		web_count++
 		proxyURL.Host = randomIndex.IP + dst_port
+
+		// レスポンスを書き換える -> 内部のwebサーバへ送る場合
+		proxy.ModifyResponse = func(res *http.Response) error {
+			mutex.Lock()
+			queue-- // 処理完了後にデクリメント
+			res_count++ 
+			mutex.Unlock()
+			return nil
+		}
 	}
-	// fmt.Println(queue)
-
-	// デバック用(選択されたIPアドレスの確認)
-	// fmt.Println("Selected IP:", randomIndex, proxyURL)
-
-	// レスポンスを書き換える
-	modifier := func(res *http.Response) error {
-		mutex.Lock()
-		queue-- // 処理完了後にデクリメント
-		res_count++ 
-		mutex.Unlock()
-		return nil
-	}
-
 	// レスポンス返却までに遅延を設定?
 	// time.Sleep(time.Duration(feedback) * time.Millisecond)
 
-	// make reverse proxy
-	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
-	proxy.ModifyResponse = modifier // ここに入れるとすぐレスポンス返却されてしまう
-	proxy.ServeHTTP(w, r)
-	// リバースプロキシ後に入れるとカウントがデクリメントされない
+	// リバースプロキシで各転送先へリクエスト移譲
+	proxy.ServeHTTP(w, r) // webサーバからレスポンス返却でres_countがインクリメント
+	//fmt.Println(queue, res_count, current_transport)
 }
 
 func dataReceiver(w http.ResponseWriter, r *http.Request) {
@@ -344,15 +355,17 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 		clusterIndex := i % len(clusterLBs)
 		clusters[clusterIndex].Data = append(clusters[clusterIndex].Data, data[i])
 		clusters[clusterIndex].Weight = append(clusters[clusterIndex].Weight, weight[i])
+		clusters[clusterIndex].Transport = append(clusters[clusterIndex].Transport, transport[i])
 	}
 
 	response := Response{
 		TotalQueue: total_data,
 		CurrentQueue: current_queue,
 		CurrentResponse: current_response,
+		CurrentTransport: total_transport,
 		Data: data,
 		Weight: weight,
-		WebResponse: web_response,
+		Transport: transport,
 	}
 
 	// --------
@@ -365,42 +378,52 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	var csvData strings.Builder
-	header := []string{"CurrentQueue"}
+	header := []string{"TotalQueue"}
+	header = append(header, "CurrentQueue")
 	header = append(header, "CurrentResponse")
-	header = append(header, "TotalQueue")
+	header = append(header, "CurrentTransport")
 	for i := 0; i < len(clusterLBs); i++ {
 		header = append(header, fmt.Sprintf("%d_Data", i))
+	}
+	for i := 0; i < len(clusterLBs); i++ {
 		header = append(header, fmt.Sprintf("%d_Weight", i))
 	}
-	header = append(header, "WebResponse")
-	header = append(header, "feedback")
-	header = append(header, "kappa")
+	for i := 0; i < len(clusterLBs); i++ {
+		header = append(header, fmt.Sprintf("%d_Transport", i))
+	}
+	
 	// パラメータが増えた場合はcsv出力としてここで追加する
 	csvData.WriteString(strings.Join(header, ",") + "\n")
 
 	rowCount := len(response.CurrentQueue)
 
 	for i := 0; i < rowCount; i++ {
-		record := []string{fmt.Sprint(response.CurrentQueue[i])}
+		record := []string{fmt.Sprint(response.TotalQueue[i])}
+		record = append(record, strconv.Itoa(response.CurrentQueue[i]))
 		record = append(record, strconv.Itoa(response.CurrentResponse[i]))
-		record = append(record, strconv.Itoa(response.TotalQueue[i]))
-		// record = []string{fmt.Sprint(response.CurrentResponse[i])}
-
+		record = append(record, strconv.Itoa(response.CurrentTransport[i]))
+		
 		for j := 0; j < len(clusterLBs); j++ {
 			if i < len(clusters[j].Data) {
 				record = append(record, strconv.Itoa(clusters[j].Data[i]))
 			} else {
 				record = append(record, "0") // データがない場合は0を挿入
 			}
-
+		}
+		for j := 0; j < len(clusterLBs); j++ {
 			if i < len(clusters[j].Weight) {
 				record = append(record, strconv.Itoa(clusters[j].Weight[i]))
 			} else {
 				record = append(record, "0") // ウェイトがない場合は0を挿入
 			}
 		}
-
-		record = append(record, strconv.Itoa(response.WebResponse[i]))
+		for j := 0; j < len(clusterLBs); j++ {
+			if i < len(clusters[j].Transport) {
+				record = append(record, strconv.Itoa(clusters[j].Transport[i]))
+			} else {
+				record = append(record, "0") // 値がない場合は0を挿入
+			}
+		}
 
 		csvData.WriteString(strings.Join(record, ",") + "\n") 
 	}
@@ -455,11 +478,6 @@ func WeightedRoundRobin_AdjacentLB() Server {
 	// 0からtotalWeight-1までの乱数を生成
 	rand.Seed(time.Now().UnixNano())
 	randomWeight := rand.Intn(totalWeight)
-
-	// randomWeightが0の場合、再度乱数を生成
-	// for randomWeight == 0 {
-	// 	randomWeight = rand.Intn(totalWeight)
-	// }
 
 	//fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
 	// 重みでサーバーを選択

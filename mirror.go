@@ -1,3 +1,4 @@
+// 閾値に基づき転送先を指定
 package main
 
 import (
@@ -51,15 +52,13 @@ type LoadBalancer struct {
 }
 
 type Response struct {
-	TotalQueue []int
-	CurrentQueue []int
-	CurrentResponse []int
+	TotalQueue []int // 総リクエスト数
+	CurrentQueue []int // セッション数
+	CurrentResponse []int // レスポンス数
+	CurrentTransport []int // 転送数
 	Data []int
 	Weight []int
-	WebResponse []int
-	Feedback int
-	Threshold int
-	Kappa float64
+	Transport []int
 }
 
 type server struct {
@@ -69,6 +68,7 @@ type server struct {
 type Split_data struct {
 	Data []int
 	Weight []int
+	Transport []int
 }
 
 // グローバル変数の定義
@@ -83,23 +83,27 @@ var (
 
 	randomIndex  Server
 	my_clusterLB string
-	queue        int // 処理待ちTCPセッション数
-	res_count    int // レスポンス返却した数をカウント	
-	currentIndex int
+	currentIndex int // RR方式におけるインデックス
 	wg           sync.WaitGroup
 	mutex        sync.RWMutex
 
-	web_count int
-
 	// 評価用パラメータ
-	total_queue int
-	total_data []int
+	queue        int // 処理待ちTCPセッション数
+	total_queue int // LBに入ってきた全てのリクエスト
+	res_count    int // レスポンス返却した数をカウント	
+	web_count int // 内部のwebサーバにてレスポンス返却した数
+	current_transport int // リバースプロキシで隣接LBに転送した数
+
+	total_data []int // 
 	current_queue []int
+	current_response []int
+	// web_response []int
+	total_transport []int
+
+	// 隣接LBごとに取得するフィードバック情報
 	data []int
 	weight []int
-
-	current_response []int
-	web_response []int
+	transport []int
 
 	final bool
 	feedback int
@@ -251,11 +255,13 @@ func getData() {
 		total_data = append(total_data, total_queue)
 		current_queue = append(current_queue, queue)
 		current_response = append(current_response, res_count)
-		web_response = append(web_response, web_count)
+		// web_response = append(web_response, web_count)
+		total_transport = append(total_transport, current_transport)
 
 		for _, server := range clusterLBs {
 			data = append(data, server.data)
 			weight = append(weight, server.weight)
+			transport = append(transport, server.transport)
 		}
 
 		time.Sleep(getdata_time * time.Millisecond) // ms
@@ -275,36 +281,41 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		Host:   "",
 	}
 
+	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
+
 	if queue > threshold {
 		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
 		randomIndex = WeightedRoundRobin_AdjacentLB()
 		proxyURL.Host = randomIndex.IP + tcp_port
+
+		proxy.ModifyResponse = func(res *http.Response) error {
+			mutex.Lock()
+			queue-- // 処理完了後にデクリメント
+			current_transport++
+			mutex.Unlock()
+			return nil
+		}
 	} else {
 		randomIndex = RoundRobin_Backend()
-		web_count++
+		// web_count++
 		proxyURL.Host = randomIndex.IP + dst_port
-	}
 
-	// fmt.Println(queue)
-
-	// デバック用(選択されたIPアドレスの確認)
-	// fmt.Println("Selected IP:", randomIndex, proxyURL)
-
-	// レスポンスを書き換える
-	modifier := func(res *http.Response) error {
-		mutex.Lock()
-		queue-- // 処理完了後にデクリメント
-		res_count++ 
-		mutex.Unlock()
-		return nil
+		// レスポンスを書き換える -> 内部のwebサーバへ送る場合
+		proxy.ModifyResponse = func(res *http.Response) error {
+			mutex.Lock()
+			queue-- // 処理完了後にデクリメント
+			res_count++ 
+			mutex.Unlock()
+			return nil
+		}
 	}
 
 	// レスポンス返却までに遅延を設定?
 	// time.Sleep(time.Duration(feedback) * time.Millisecond)
 
 	// make reverse proxy
-	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
-	proxy.ModifyResponse = modifier // ここに入れるとすぐレスポンス返却されてしまう
+	// proxy := httputil.NewSingleHostReverseProxy(proxyURL)
+	// proxy.ModifyResponse = modifier // ここに入れるとすぐレスポンス返却されてしまう
 	proxy.ServeHTTP(w, r)
 	// リバースプロキシ後に入れるとカウントがデクリメントされない
 }
@@ -331,18 +342,17 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 		clusterIndex := i % len(clusterLBs)
 		clusters[clusterIndex].Data = append(clusters[clusterIndex].Data, data[i])
 		clusters[clusterIndex].Weight = append(clusters[clusterIndex].Weight, weight[i])
+		clusters[clusterIndex].Transport = append(clusters[clusterIndex].Transport, transport[i])
 	}
 
 	response := Response{
 		TotalQueue: total_data,
 		CurrentQueue: current_queue,
 		CurrentResponse: current_response,
+		CurrentTransport: total_transport,
 		Data: data,
 		Weight: weight,
-		WebResponse: web_response,
-		Feedback: feedback,
-		Threshold: threshold,
-		Kappa: kappa,
+		Transport: transport,
 	}
 
 	// --------
@@ -355,53 +365,51 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	var csvData strings.Builder
-	header := []string{"CurrentQueue"}
+	header := []string{"TotalQueue"}
+	header = append(header, "CurrentQueue")
 	header = append(header, "CurrentResponse")
-	header = append(header, "TotalQueue")
+	header = append(header, "CurrentTransport")
 	for i := 0; i < len(clusterLBs); i++ {
 		header = append(header, fmt.Sprintf("%d_Data", i))
+	}
+	for i := 0; i < len(clusterLBs); i++ {
 		header = append(header, fmt.Sprintf("%d_Weight", i))
 	}
-	header = append(header, "WebResponse")
-	header = append(header, "feedback")
-	header = append(header, "threshold")
-	header = append(header, "kappa")
+	for i := 0; i < len(clusterLBs); i++ {
+		header = append(header, fmt.Sprintf("%d_Transport", i))
+	}
+	
 	// パラメータが増えた場合はcsv出力としてここで追加する
 	csvData.WriteString(strings.Join(header, ",") + "\n")
 
 	rowCount := len(response.CurrentQueue)
 
 	for i := 0; i < rowCount; i++ {
-		record := []string{fmt.Sprint(response.CurrentQueue[i])}
+		record := []string{fmt.Sprint(response.TotalQueue[i])}
+		record = append(record, strconv.Itoa(response.CurrentQueue[i]))
 		record = append(record, strconv.Itoa(response.CurrentResponse[i]))
-		record = append(record, strconv.Itoa(response.TotalQueue[i]))
-		// record = []string{fmt.Sprint(response.CurrentResponse[i])}
-
+		record = append(record, strconv.Itoa(response.CurrentTransport[i]))
+		
 		for j := 0; j < len(clusterLBs); j++ {
 			if i < len(clusters[j].Data) {
 				record = append(record, strconv.Itoa(clusters[j].Data[i]))
 			} else {
 				record = append(record, "0") // データがない場合は0を挿入
 			}
-
+		}
+		for j := 0; j < len(clusterLBs); j++ {
 			if i < len(clusters[j].Weight) {
 				record = append(record, strconv.Itoa(clusters[j].Weight[i]))
 			} else {
 				record = append(record, "0") // ウェイトがない場合は0を挿入
 			}
 		}
-
-		record = append(record, strconv.Itoa(response.WebResponse[i]))
-
-		// TotalQueueを最初の行にのみ追加
-		if i == 0 {
-			record = append(record, strconv.Itoa(response.Feedback))
-			record = append(record, strconv.Itoa(response.Threshold))
-			record = append(record, strconv.FormatFloat(response.Kappa, 'f', -1, 64))
-		} else {
-			record = append(record, "") // それ以外の行には空白を挿入
-			record = append(record, "")
-			record = append(record, "")
+		for j := 0; j < len(clusterLBs); j++ {
+			if i < len(clusters[j].Transport) {
+				record = append(record, strconv.Itoa(clusters[j].Transport[i]))
+			} else {
+				record = append(record, "0") // 値がない場合は0を挿入
+			}
 		}
 
 		csvData.WriteString(strings.Join(record, ",") + "\n") 
