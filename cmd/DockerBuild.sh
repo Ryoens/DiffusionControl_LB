@@ -81,26 +81,3 @@ for container in $(docker ps --format "{{.Names}}"); do
   fi
 done
 
-# コンテナとそのコア割り当てを表示
-echo "コンテナとそのコア割り当て:"
-
-# Nginxコンテナにコアを割り当て
-for ((i=0; i<${#nginx_containers[@]}; i++)); do
-  # echo "${nginx_containers[i]}: $core_index"
-  docker update --cpuset-cpus="$core_index" "${nginx_containers[i]}"
-  sleep 1
-  
-  # 3つごとに次のコアに進める
-  if (( (i + 1) % 3 == 0 )); then
-    core_index=$((core_index + 1))
-  fi
-done
-
-# LBコンテナにコアを割り当て
-for lb in "${lb_containers[@]}"; do
-  # echo "$lb: $core_index"  # Nginxの次のコアを使用
-  docker container update --cpuset-cpus="$core_index" "$lb"
-  core_index=$((core_index + 1))  # 次のコアに進める
-  sleep 1
-done
-

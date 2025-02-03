@@ -7,23 +7,42 @@ read -p "feedback: " feedback
 read -p "threshold: " threshold
 read -p "kappa: " kappa
 
-echo $feedback $threshold $kappa
+# 小数点をアンダーバーに置換
+safe_kappa=$(echo "$kappa" | sed 's/\./_/g')
+echo $feedback $threshold $kappa $safe_kappa
 
 echo "-------- parameter OK --------"
 
-read -p "仮想ユーザ数: " vus
+read -p "concurrent: " vus
+read -p "total requests: " req
 read -p "number of attempts: " attempt
-echo $attempt
+echo $vus $req $attempt
+
+echo "-------- request OK --------"
 
 # timestampディレクトリを作成
+read -p "file to apply: " file # main.go, mirror.go
 timestamp_data=$(date +"%Y%m%d_%H%M%S")
-data_dir="../../data/${timestamp_data}"
+read -p "parameter to be changed:" type # request, threshold, kappa
+dirname="t${feedback}_t${threshold}_k${safe_kappa}_vus${vus}"
+# dirname="t${feedback}_k${safe_kappa}_vus${vus}"
+data_dir="../../data/${type}/${dirname}"
 mkdir -p "$data_dir"
 
 # クラスタ数をコンテナ数から取得
 container=$(docker ps --filter "name=_LB" --format "{{.Names}}" | head -n 1)
 KEY=${container:7:1}
 echo "number of clusters: " $KEY
+
+count=0
+# gRPCのビルド
+while [ $count -le $KEY ]
+do
+    docker exec -d Cluster${count}_LB go vet $file /bin/bash
+    docker exec Cluster${count}_LB ps aux
+    count=`expr $count + 1`
+done
+echo "build OK"
 
 while [ $attempt_count -le $attempt ]
 do
@@ -34,7 +53,8 @@ do
     # プログラムの実行 (gRPCが起動しない場合の挙動も必要) -> 仮想ブリッジの問題
     while [ $count -le $KEY ]
     do
-        docker exec -d Cluster${count}_LB go run mirror.go -t $feedback -q $threshold -k $kappa /bin/bash
+        docker exec -d Cluster${count}_LB go run $file -t $feedback -q $threshold -k $kappa /bin/bash
+        # docker exec -d Cluster${count}_LB go run $file -t $feedback -k $kappa /bin/bash
         docker exec Cluster${count}_LB ps aux # goのプロセスが走っていなかったらやり直しにしたい
         count=`expr $count + 1`
     done
@@ -42,16 +62,13 @@ do
     # 実験データの取得
     sleep 1
     echo $vus
-
-    ## k6による負荷テスト
-    timestamp=$(date +"%Y%m%d_%H%M%S")
-    # コアごとのCPU使用率取得 (未使用)
-    # mpstat -P 0-9 1 60 | awk -v OFS=',' \
-    # 'BEGIN {print "Timestamp","CPU","%user","%nice","%system","%iowait","%irq","%soft","%steal","%idle"} 
-    # NR>4 {print strftime("%H:%M:%S"), $3, $4, $5, $6, $7, $8, $9, $10, $NF}' > "${data_dir}/cpu_usage_${timestamp}.csv" &
-    k6 run ../test.js --vus $vus --summary-export="${data_dir}/summary"_"$timestamp.json"
     # --------------------------
 
+    # apache benchによる負荷テスト
+    timestamp=$(date +"%Y%m%d_%H%M%S")
+    ab -n $req -c $vus http://114.51.4.2:8001/ > "${data_dir}/result_${timestamp}.html"
+    wait
+    echo "All tests completed."
     ## curlで大量にリクエストを送信
     # test.shを実行したい
 
@@ -76,4 +93,5 @@ echo "feedback: $feedback [ms]"
 echo "threshold: $threshold"
 echo "kappa: $kappa"
 echo "virtual users: $vus [users]"
+echo "total requests: $req [requests]"
 } > "${data_dir}/parameters"_"$timestamp".txt
