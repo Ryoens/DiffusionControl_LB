@@ -64,20 +64,3 @@ done
 
 echo "}" >> $JSON_FILE
 
-# コンテナごとにCPUコアを割り当てる
-total_cores=$(nproc --all)
-core_index=0
-
-nginx_containers=()
-lb_containers=()
-
-for container in $(docker ps --format "{{.Names}}"); do
-  # Nginx コンテナを探す (コンテナ名に "web" を含むもの)
-  if [[ $container == *web* ]]; then
-    nginx_containers+=("$container")
-  # LB コンテナを探す (コンテナ名に "LB" を含むもの)
-  elif [[ $container == *LB* ]]; then
-    lb_containers+=("$container")
-  fi
-done
-
