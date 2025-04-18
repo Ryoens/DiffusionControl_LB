@@ -39,13 +39,35 @@ echo "number of clusters: " $KEY
 count=0
 compiled_file="${file%.go}"
 # gRPCのビルド
-while [ $count -le $KEY ]
+# while [ $count -le $KEY ]
+# for ((count=0; count<=KEY; count++));
+
+# nameserverの設定
+for count in $(seq 0 "$KEY");
+do 
+    docker exec Cluster${count}_LB sh -c 'echo "nameserver 8.8.8.8" > /etc/resolv.conf'
+    docker exec Cluster${count}_LB cat /etc/resolv.conf
+done
+
+for count in $(seq 0 "$KEY");
 do
-    docker exec -d Cluster${count}_LB go build -o $compiled_file $file /bin/bash
-    docker exec Cluster${count}_LB ps aux
-    count=`expr $count + 1`
+    # docker exec Cluster${count}_LB echo "nameserver 8.8.8.8" > /etc/resolv.conf
+    # sleep 1
+    # docker exec -d Cluster${count}_LB go build -o $compiled_file $file
+    docker exec Cluster${count}_LB sh -c "go build -o $compiled_file lb/$file"
+    # docker exec Cluster${count}_LB ps aux
+    # count=`expr $count + 1`
 done
 echo "build OK"
+
+for count in $(seq 0 "$KEY");
+do
+    # docker exec -d Cluster${count}_LB go build -o $compiled_file $file
+    docker exec Cluster${count}_LB ls -l $compiled_file
+    docker exec Cluster${count}_LB ps aux
+    # count=`expr $count + 1`
+done
+
 sleep 5
 
 while [ $attempt_count -le $attempt ]
@@ -55,19 +77,22 @@ do
 
     # go run $file -t $feedback -q $threshold -k $kappa
     # プログラムの実行 (gRPCが起動しない場合の挙動も必要) -> 仮想ブリッジの問題
-    while [ $count -le $KEY ]
+    # for文に変更 
+    # while [ $count -le $KEY ]
+    # for ((count=0; count<=KEY; count++));
+    for count in $(seq 0 "$KEY");
     do
         docker exec -d Cluster${count}_LB ./$compiled_file -t $feedback -q $threshold -k $kappa /bin/bash
         # docker exec -d Cluster${count}_LB go run $file -t $feedback -k $kappa /bin/bash
         docker exec Cluster${count}_LB ps aux # goのプロセスが走っていなかったらやり直しにしたい
-        count=`expr $count + 1`
+        # count=`expr $count + 1`
     done
 
     # 実験データの取得
-    sleep 1
+    # sleep 1
     echo $vus
     # --------------------------
-    # 負荷テスト(apache bench, curl, wrk, etc...)
+    # 負荷テスト(apache bench, apache jmeter, curl, wrk, etc...)
 
     # apache benchによる負荷テスト
     timestamp=$(date +"%Y%m%d_%H%M%S")
@@ -86,6 +111,7 @@ do
     done
 
     attempt_count=`expr $attempt_count + 1`
+    docker exec -it redis-server redis-cli flushall # rediskeyの初期化
     sleep 10
 done
 

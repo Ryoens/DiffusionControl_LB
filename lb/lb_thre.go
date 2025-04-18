@@ -278,13 +278,13 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		Host:   "",
 	}
 
-	// リバースプロキシを作成
 	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
 
 	if queue > threshold {
 		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
-		randomIndex = WeightedRoundRobin_AdjacentLB()
-		proxyURL.Host = randomIndex.IP + tcp_port
+		// randomIndex = WeightedRoundRobin_AdjacentLB()
+		// proxyURL.Host = randomIndex.IP + tcp_port
+		proxyURL.Host = WeightedRoundRobin_AdjacentLB()
 
 		proxy.ModifyResponse = func(res *http.Response) error {
 			mutex.Lock()
@@ -306,10 +306,12 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 	}
+	// fmt.Println("Selected IP:", proxyURL)
 
 	// レスポンス返却までに遅延を設定?
 	// time.Sleep(time.Duration(feedback) * time.Millisecond)
-
+	// リバースプロキシを作成
+	// proxy = httputil.NewSingleHostReverseProxy(proxyURL)
 	proxy.ServeHTTP(w, r)
 }
 
@@ -432,7 +434,7 @@ func joinWeight(weight []int) string {
 }
 
 // クラスタ間の重みづけラウンドロビン(隣接LBへの振り分け)
-func WeightedRoundRobin_AdjacentLB() Server {
+func WeightedRoundRobin_AdjacentLB() string {
 	// 重みは動的に変化した値を取得
 	mutex.RLock()
 	defer mutex.RUnlock()
@@ -448,7 +450,8 @@ func WeightedRoundRobin_AdjacentLB() Server {
 
 	// すべての重みが0の場合(どこの隣接LBも空いていないとき)
 	if totalWeight == 0 {
-		return RoundRobin_Backend()
+		tempIndex := RoundRobin_Backend()
+		return tempIndex.IP + dst_port
 	}
 
 	// 0からtotalWeight-1までの乱数を生成
@@ -460,16 +463,18 @@ func WeightedRoundRobin_AdjacentLB() Server {
 	for i, server := range clusterLBs {
 		if randomWeight < server.weight {
 			clusterLBs[i].transport++
-			return Server{
-				IP:     server.Address,
-				Weight: server.weight,
-			}
+			// return Server{
+			// 	IP:     server.Address,
+			// 	Weight: server.weight,
+			// }
+			return server.Address + tcp_port
 		}
 		randomWeight -= server.weight
 	}
 
-	// ここには到達しないはずだが、デフォルトで最初のサーバーを返す
-	return RoundRobin_Backend()
+	// ポート番号をdst_portに指定
+	tempIndex := RoundRobin_Backend()
+	return tempIndex.IP + dst_port
 }
 
 // クラスタ内でのラウンドロビン(バックエンドサーバへの振り分け)

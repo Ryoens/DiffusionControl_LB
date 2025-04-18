@@ -183,6 +183,7 @@ func main(){
 	for i, address := range clusterLBs {
 		wg.Add(1)
 		go Socket_Client(address.Address, i)
+		fmt.Printf("%d, %v\n", i, address)
 	}
 	
 	wg.Add(1)
@@ -224,17 +225,20 @@ func main(){
 
 func getData() {
 	for {
-		fmt.Println("loop")
+		// fmt.Println("loop")
 
 		if final {
 			os.Exit(1)
 		}
+		queue++
 
 		current_queue = append(current_queue, queue)
 
-		for _, server := range clusterLBs {
+		for i, server := range clusterLBs {
 			data = append(data, server.data)
 			weight = append(weight, server.weight)
+
+			fmt.Printf("%d data: %d, weight: %d\n", i, server.data, server.weight)
 		}
 
 		time.Sleep(time.Duration(sleep_time) * time.Second)
@@ -255,11 +259,13 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 
 	if queue > threshold {
 		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
-		randomIndex = WeightedRoundRobin_AdjacentLB()
-		proxyURL.Host = randomIndex.IP + tcp_port
+		// randomIndex = WeightedRoundRobin_AdjacentLB()
+		// proxyURL.Host = randomIndex.IP + tcp_port
+		proxyURL.Host = WeightedRoundRobin_AdjacentLB()
 	} else {
 		randomIndex = RoundRobin_Backend()
 		proxyURL.Host = randomIndex.IP + dst_port
+		fmt.Println(proxyURL.Host)
 	}
 
 	fmt.Println(queue)
@@ -275,9 +281,6 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 
-	// レスポンス返却までに遅延を設定?
-
-
 	// make reverse proxy
 	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
 	proxy.ModifyResponse = modifier // ここに入れるとすぐレスポンス返却されてしまう
@@ -285,16 +288,17 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 	// リバースプロキシ後に入れるとカウントがデクリメントされない
 }
 
+
 func dataReceiver(w http.ResponseWriter, r *http.Request) {
 
 	// w.Header().Set("Access-Control-Allow-Origin", "*")
 	// w.Header().Set("Content-Type", "application/json")
 
 	// 負荷テスト終了後に各パラメータのデータを取得
-	fmt.Printf("total_request: %d\n", total_queue)
-	fmt.Printf("queue_transition: %d\n", current_queue)
-	fmt.Printf("total_data: %d\n", data)
-	fmt.Printf("total_weight: %d\n", weight)
+	// fmt.Printf("total_request: %d\n", total_queue)
+	// fmt.Printf("queue_transition: %d\n", current_queue)
+	// fmt.Printf("total_data: %d\n", data)
+	// fmt.Printf("total_weight: %d\n", weight)
 
 	// 本来ならクラスタごとのデータを取得したい
 	for i := 0; i < len(clusterLBs); i++ {
@@ -404,7 +408,7 @@ func joinWeight(weight []int) string {
 }
 
 // クラスタ間の重みづけラウンドロビン(隣接LBへの振り分け)
-func WeightedRoundRobin_AdjacentLB() Server {
+func WeightedRoundRobin_AdjacentLB() string {
 	// 重みは動的に変化した値を取得
 	mutex.RLock()
 	defer mutex.RUnlock()
@@ -420,28 +424,32 @@ func WeightedRoundRobin_AdjacentLB() Server {
 
 	// すべての重みが0の場合(どこの隣接LBも空いていないとき)
 	if totalWeight == 0 {
-		return Server{}
+		// ポート番号をdst_portに指定 
+		tempIndex := RoundRobin_Backend()
+		return tempIndex.IP + dst_port
 	}
 
 	// 0からtotalWeight-1までの乱数を生成
 	rand.Seed(time.Now().UnixNano())
 	randomWeight := rand.Intn(totalWeight)
 
-	fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
+	//fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
 	// 重みでサーバーを選択
 	for i, server := range clusterLBs {
 		if randomWeight < server.weight {
 			clusterLBs[i].transport++
-			return Server{
-				IP:     server.Address,
-				Weight: server.weight,
-			}
+			// return Server{
+			// 	IP:     server.Address,
+			// 	Weight: server.weight,
+			// }
+			return server.Address + tcp_port
 		}
 		randomWeight -= server.weight
 	}
 
-	// ここには到達しないはずだが、デフォルトで最初のサーバーを返す
-	return Server{}
+	// ポート番号をdst_portに指定
+	tempIndex := RoundRobin_Backend()
+	return tempIndex.IP + dst_port
 }
 
 // クラスタ内でのラウンドロビン(バックエンドサーバへの振り分け)
@@ -457,17 +465,17 @@ func Socket_Server() {
 	defer wg.Done()
 
 	udpAddr, err := net.ResolveUDPAddr("udp", grpc_dest)
-  	if err != nil {
+	if err != nil {
 		fmt.Println("Error resolving address:", err)
-    	os.Exit(1)
-  	}
+		os.Exit(1)
+	}
 
 	conn, err := net.ListenUDP("udp", udpAddr)
-  	if err != nil {
+	if err != nil {
 		fmt.Println("Error opening UDP connection:", err)
-    	os.Exit(1)
-  	}
-  	defer conn.Close()
+		os.Exit(1)
+	}
+	defer conn.Close()
 
 	fmt.Println("Server is listening on", grpc_dest)
 
@@ -479,17 +487,11 @@ func Socket_Server() {
 			continue
 		}
 		message := string(buffer[:n])
-		fmt.Printf("Received message: %s from %s\n", string(buffer[:n]), addr)
-		
-		response := []byte("Message received")
-		_, err = conn.WriteToUDP(response, addr)
-		if err != nil {
-			fmt.Println("Error sending response:", err)
-		}
+		fmt.Printf("Received message: %s from %s\n", message, addr)
 
-		// ヘルスチェックの応答
-		if message == healthCheckMsg {
-			response := "Server is healthy"
+		// 制御メッセージかどうか判定して応答（payload: queue値を返す）
+		if strings.HasPrefix(message, controlMsgPrefix) {
+			response := strconv.Itoa(queue)
 			_, err = conn.WriteToUDP([]byte(response), addr)
 			if err != nil {
 				fmt.Println("Error sending response:", err)
@@ -497,19 +499,9 @@ func Socket_Server() {
 			continue
 		}
 
-		// 通常の制御メッセージの応答
-		if len(message) > len(controlMsgPrefix) && message[:len(controlMsgPrefix)] == controlMsgPrefix {
-			response := fmt.Sprintf("Control response for: %s", message)
-			_, err = conn.WriteToUDP([]byte(response), addr)
-			if err != nil {
-				fmt.Println("Error sending response:", err)
-			}
-			continue
-		}
-
-		// 通常の応答
-		response = []byte(fmt.Sprintf("Server received: %s", message))
-		_, err = conn.WriteToUDP([]byte(response), addr) // バイトスライスに変換
+		// その他の通常応答
+		response := fmt.Sprintf("Server received: %s", message)
+		_, err = conn.WriteToUDP([]byte(response), addr)
 		if err != nil {
 			fmt.Println("Error sending response:", err)
 		}
@@ -522,7 +514,6 @@ func Socket_Client(address string, i int) {
 
 	adjacent_lb := address + grpc_dest
 
-	// サーバとのコネクションを確立
 	addr, err := net.ResolveUDPAddr("udp", adjacent_lb)
 	if err != nil {
 		fmt.Println("Failed to resolve address:", err)
@@ -536,56 +527,37 @@ func Socket_Client(address string, i int) {
 	}
 	defer conn.Close()
 
-	// ヘルスチェックを送信
-	_, err = conn.Write([]byte(healthCheckMsg))
-	if err != nil {
-		fmt.Println("Error sending health check:", err)
-		return
-	}
-	fmt.Printf("Sent: %s\n", healthCheckMsg)
-
-	// サーバーからのヘルスチェック応答を待つ
-	buffer := make([]byte, 1024)
-	n, _, err := conn.ReadFromUDP(buffer)
-	if err != nil {
-		fmt.Println("Error receiving health check response:", err)
-		clusterLBs[i].IsHealthy = false
-		return
-	}
-	clusterLBs[i].IsHealthy = true
-	fmt.Printf("Received health check response: %s\n", string(buffer[:n]))
-
-	// 定期的に制御情報を送受信
 	ticker := time.NewTicker(time.Duration(feedback) * time.Millisecond)
 	defer ticker.Stop()
 
-	// 一定間隔ごとに制御メッセージを送信
-	for {
-		<-ticker.C // 一定間隔で待機
+	buffer := make([]byte, 1024)
+	// fmt.Println("buffer")
+
+	for range ticker.C {
 		controlMsg := fmt.Sprintf("%s", controlMsgPrefix)
-		_, err = conn.Write([]byte(controlMsg))
+		_, err := conn.Write([]byte(controlMsg))
 		if err != nil {
 			fmt.Println("Error sending control message:", err)
 			return
 		}
-		fmt.Printf("Sent: %s\n", controlMsg)
 
-		// サーバーからの応答を待つ
-		n, _, err = conn.ReadFromUDP(buffer)
+		n, _, err := conn.ReadFromUDP(buffer)
 		if err != nil {
 			fmt.Println("Error receiving response:", err)
 			return
 		}
-		fmt.Printf("Received response: %s\n", string(buffer[:n]))
+
+		responseStr := string(buffer[:n])
+		fmt.Printf("Received response: %s\n", responseStr)
 
 		mutex.Lock()
-		clusterLBs[i].data, err = strconv.Atoi(string(buffer[:n]))
+		clusterLBs[i].data, err = strconv.Atoi(responseStr)
 		if err != nil {
 			fmt.Println("Error converting response to int:", err)
-			return
+			mutex.Unlock()
+			continue
 		}
 
-		fmt.Println(clusterLBs[i].data, clusterLBs)
 		Calculate(clusterLBs[i].data, i)
 		mutex.Unlock()
 	}
@@ -595,6 +567,7 @@ func Socket_Client(address string, i int) {
 // 転送するリクエスト数の計算(重み)
 func Calculate(next_queue int, num int) {
 	// DC方式で計算
+	fmt.Printf("%d, %d calc: ", num, next_queue)
 
 	if queue > next_queue {
 		diff := queue - next_queue
@@ -602,5 +575,7 @@ func Calculate(next_queue int, num int) {
 	} else {
 		clusterLBs[num].weight = 0
 	}
+
+	fmt.Printf("%d\n", clusterLBs[num].weight)
 
 }
