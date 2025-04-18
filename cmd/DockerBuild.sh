@@ -62,5 +62,8 @@ do
 	KEY=`expr $KEY + 1`
 done
 
+docker run -d --name redis-server -p 6379:6379 redis:latest
+docker network connect gushing-ecstasy redis-server
+
 echo "}" >> $JSON_FILE
 

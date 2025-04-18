@@ -3,6 +3,9 @@
 KEY=0
 QTY_CLUSTER=$(($1))
 
+docker stop redis-server
+docker rm redis-server
+
 echo $QTY_CLUSTER
 
 while [ $KEY -le $QTY_CLUSTER ]
