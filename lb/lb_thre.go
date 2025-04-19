@@ -349,7 +349,6 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// --------
-	// filename := "./log/output.csv"
 	file, err := os.Create(logFile)
 	if err != nil {
 		fmt.Println("failure creating csv file:", err)
@@ -420,7 +419,6 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, logFile)
 
 	final = true
-	// os.Exit(1)
 } 
 
 // ウェイトのスライスをカンマ区切りの文字列に変換するヘルパー関数
@@ -587,8 +585,8 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 	}
 
 	// 定期的にヘルスチェックと制御情報を送受信
-	// ticker := time.NewTicker(time.Duration(sleep_time) * time.Second)
-	ticker := time.NewTicker(time.Duration(feedback) * time.Millisecond)
+	// ticker := time.NewTicker(time.Duration(sleep_time) * time.Second) // s
+	ticker := time.NewTicker(time.Duration(feedback) * time.Millisecond) // ms
 	for range ticker.C {
 		// 制御情報の送信
 		if err := stream.Send(&pb.ControlMessage{Command: "update_policy", Payload: int64(queue)}); err != nil {
@@ -629,12 +627,10 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 // 転送するリクエスト数の計算(重み)
 func Calculate(next_queue int, num int) {
 	// DC方式で計算
-
 	if queue > next_queue {
 		diff := queue - next_queue
 		clusterLBs[num].weight = int(math.Round(kappa * float64(diff)))
 	} else {
 		clusterLBs[num].weight = 0
 	}
-
 }

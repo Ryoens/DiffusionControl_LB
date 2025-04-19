@@ -377,7 +377,6 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// --------
-	// filename := "./log/output.csv"
 	file, err := os.Create(logFile)
 	if err != nil {
 		fmt.Println("failure creating csv file:", err)
@@ -448,7 +447,6 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, logFile)
 
 	final = true
-	// os.Exit(1)
 } 
 
 // ウェイトのスライスをカンマ区切りの文字列に変換するヘルパー関数
@@ -654,12 +652,10 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 // 転送するリクエスト数の計算(重み)
 func Calculate(next_queue int, num int) {
 	// DC方式で計算
-
 	if queue > next_queue {
 		diff := queue - next_queue
 		clusterLBs[num].weight = int(math.Round(kappa * float64(diff)))
 	} else {
 		clusterLBs[num].weight = 0
 	}
-
 }
