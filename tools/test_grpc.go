@@ -18,7 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	// "strconv"
+	"strconv"
 	"sync"
 	"time"
 
@@ -36,6 +36,7 @@ type LoadBalancer struct {
 	IsHealthy bool // ヘルスチェック用
 	Data int
 	Weight int
+	Transport int
 }
 
 type webServer struct {
@@ -54,6 +55,21 @@ type Server struct {
 }
 
 // 集計データに関して(Response, splitData)
+type Response struct {
+	TotalQueue []int // 総リクエスト数
+	CurrentQueue []int // セッション数
+	CurrentResponse []int // レスポンス数
+	CurrentTransport []int // 転送数
+	Data []int
+	Weight []int
+	Transport []int
+}
+
+type splitData struct {
+	Data []int
+	Weight []int
+	Transport []int
+}
 
 var (
 	clusterLBs []LoadBalancer
@@ -79,16 +95,15 @@ var (
 
 	// 評価用パラメータ
 	queue        int // 処理待ちTCPセッション数
-	total_queue int // LBに入ってきた全てのリクエスト
-	res_count    int // レスポンス返却した数をカウント	
-	web_count int // 内部のwebサーバにてレスポンス返却した数
-	current_transport int // リバースプロキシで隣接LBに転送した数
+	totalQueue int // LBに入ってきた全てのリクエスト
+	responseCount    int // レスポンス返却した数をカウント	
+	webResponseCount int // 内部のwebサーバにてレスポンス返却した数
+	currentTransport int // リバースプロキシで隣接LBに転送した数
 
-	total_data []int // 
-	current_queue []int
-	current_response []int
-	// web_response []int
-	total_transport []int
+	totalData []int // 
+	currentQueue []int
+	currentResponse []int
+	totalTransport []int
 
 	// 隣接LBごとに取得するフィードバック情報
 	data []int
@@ -203,6 +218,7 @@ func init(){
 				IsHealthy: true,
 				Data:      0,
 				Weight:    0,
+				Transport: 0,
 			})
 			id++
 		}
@@ -262,7 +278,25 @@ func main(){
 	go func(){
 		defer wg.Done()
 		for {
-			// getData()
+			if final {
+				os.Exit(1)
+			}
+	
+			totalData = append(totalData, totalQueue)
+			currentQueue = append(currentQueue, queue)
+			currentResponse = append(currentResponse, responseCount)
+			totalTransport = append(totalTransport, currentTransport)
+	
+			for _, server := range clusterLBs {
+				data = append(data, server.Data)
+				weight = append(weight, server.Weight)
+				transport = append(transport, server.Transport)
+			}
+	
+			// time.Sleep(getDataTime * time.Millisecond) // ms
+			// time.Sleep(time.Duration(sleep_time) * time.Second) // s
+			
+			// test
 			queue++
 			fmt.Println(queue)
 			time.Sleep(time.Duration(sleepTime) * time.Second)
@@ -275,7 +309,7 @@ func main(){
 // リクエストをweighted RRで処理
 func lbHandler(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
-	total_queue++
+	totalQueue++
 	queue++ // 処理待ちセッション数をインクリメント
 	mutex.Unlock()
 
@@ -293,7 +327,7 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		proxy.ModifyResponse = func(res *http.Response) error {
 			mutex.Lock()
 			queue-- // 処理完了後にデクリメント
-			current_transport++
+			currentTransport++
 			mutex.Unlock()
 			return nil
 		}
@@ -305,7 +339,7 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		proxy.ModifyResponse = func(res *http.Response) error {
 			mutex.Lock()
 			queue-- // 処理完了後にデクリメント
-			res_count++ 
+			responseCount++ 
 			mutex.Unlock()
 			return nil
 		}
@@ -340,9 +374,9 @@ func WeightedRoundRobin_AdjacentLB() string {
 
 	//fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
 	// 重みでサーバーを選択
-	for _, server := range clusterLBs {
+	for i, server := range clusterLBs {
 		if randomWeight < server.Weight {
-			// clusterLBs[i].transport++
+			clusterLBs[i].Transport++
 			return server.Address + tcpPort
 		}
 		randomWeight -= server.Weight
@@ -493,7 +527,7 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 		mutex.Lock()
 		clusterLBs[num].Data = int(in.Payload)
 
-		//fmt.Println(clusterLBs[num].data, clusterLBs)
+		// fmt.Println(clusterLBs[num].data, clusterLBs)
 		Calculate(clusterLBs[num].Data, num)
 		mutex.Unlock()
 	}
@@ -512,19 +546,122 @@ func Calculate(next_queue int, num int) {
 }
 
 // dataReceiver()
-func dataReceiver(w http.ResponseWriter, r *http.Request){
+func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	// 負荷テスト終了後に各パラメータのデータを取得
-	fmt.Printf("total_request: %d\n", total_queue)
-	fmt.Printf("queue_transition: %d\n", current_queue)
+	fmt.Printf("total_request: %d\n", totalQueue)
+	fmt.Printf("queue_transition: %d\n", currentQueue)
 	fmt.Printf("total_data: %d\n", data)
 	fmt.Printf("total_weight: %d\n", weight)
 
-	fmt.Println(webServers)
+	// 本来ならクラスタごとのデータを取得したい
+	for i := 0; i < len(clusterLBs); i++ {
+		fmt.Printf("amount of transport(%s): %d\n", clusterLBs[i].Address, clusterLBs[i].Transport)
+	}
 
-	os.Exit(0)
-}
+	clusters := make([]splitData, len(clusterLBs))
+
+	for i := 0; i < len(data); i++ {
+		clusterIndex := i % len(clusterLBs)
+		clusters[clusterIndex].Data = append(clusters[clusterIndex].Data, data[i])
+		clusters[clusterIndex].Weight = append(clusters[clusterIndex].Weight, weight[i])
+		clusters[clusterIndex].Transport = append(clusters[clusterIndex].Transport, transport[i])
+	}
+
+	response := Response{
+		TotalQueue: totalData,
+		CurrentQueue: currentQueue,
+		CurrentResponse: currentResponse,
+		CurrentTransport: totalTransport,
+		Data: data,
+		Weight: weight,
+		Transport: transport,
+	}
+
+	// --------
+	file, err := os.Create(logFile)
+	if err != nil {
+		fmt.Println("failure creating csv file:", err)
+		return
+	}
+	defer file.Close()
+
+	var csvData strings.Builder
+	header := []string{"TotalQueue"}
+	header = append(header, "CurrentQueue")
+	header = append(header, "CurrentResponse")
+	header = append(header, "CurrentTransport")
+	for i := 0; i < len(clusterLBs); i++ {
+		header = append(header, fmt.Sprintf("%d_Data", i))
+	}
+	for i := 0; i < len(clusterLBs); i++ {
+		header = append(header, fmt.Sprintf("%d_Weight", i))
+	}
+	for i := 0; i < len(clusterLBs); i++ {
+		header = append(header, fmt.Sprintf("%d_Transport", i))
+	}
+	
+	// パラメータが増えた場合はcsv出力としてここで追加する
+	csvData.WriteString(strings.Join(header, ",") + "\n")
+
+	rowCount := len(response.CurrentQueue)
+
+	for i := 0; i < rowCount; i++ {
+		record := []string{fmt.Sprint(response.TotalQueue[i])}
+		record = append(record, strconv.Itoa(response.CurrentQueue[i]))
+		record = append(record, strconv.Itoa(response.CurrentResponse[i]))
+		record = append(record, strconv.Itoa(response.CurrentTransport[i]))
+		
+		for j := 0; j < len(clusterLBs); j++ {
+			if i < len(clusters[j].Data) {
+				record = append(record, strconv.Itoa(clusters[j].Data[i]))
+			} else {
+				record = append(record, "0") // データがない場合は0を挿入
+			}
+		}
+		for j := 0; j < len(clusterLBs); j++ {
+			if i < len(clusters[j].Weight) {
+				record = append(record, strconv.Itoa(clusters[j].Weight[i]))
+			} else {
+				record = append(record, "0") // ウェイトがない場合は0を挿入
+			}
+		}
+		for j := 0; j < len(clusterLBs); j++ {
+			if i < len(clusters[j].Transport) {
+				record = append(record, strconv.Itoa(clusters[j].Transport[i]))
+			} else {
+				record = append(record, "0") // 値がない場合は0を挿入
+			}
+		}
+
+		csvData.WriteString(strings.Join(record, ",") + "\n") 
+	}
+
+	_, err = file.WriteString(csvData.String())
+	if err != nil {
+		fmt.Println("Error writing to CSV file:", err)
+		return
+	}
+	// --------
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", "attachment; filename="+logFile)
+
+	http.ServeFile(w, r, logFile)
+
+	final = true
+} 
 
 // joinWeight()
+// ウェイトのスライスをカンマ区切りの文字列に変換するヘルパー関数
+func joinWeight(weight []int) string {
+	var result strings.Builder
+	for i, w := range weight {
+		if i > 0 {
+			result.WriteString(",")
+		}
+		result.WriteString(strconv.Itoa(w))
+	}
+	return result.String()
+}
 
 func waitForAllLBsAndSyncStart(ctx context.Context, rdb *redis.Client, ownClusterLB string, totalLBs int, isLeader bool, redisKey string) {
 	pubsubChannel := "sync_start"
