@@ -111,6 +111,7 @@ do
     done
 
     attempt_count=`expr $attempt_count + 1`
+    rm ./log/output.csv
     docker exec -it redis-server redis-cli flushall # rediskeyの初期化
     sleep 10
 done

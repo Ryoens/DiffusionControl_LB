@@ -95,6 +95,8 @@ const (
 	grpc_dest  string  = ":50051" // gRPCで使用
 	sleep_time int     = 1
 
+	logFile = "./log/output.csv"
+
 	healthCheckMsg   = "HEALTH_CHECK"
 	controlMsgPrefix = "CONTROL"
 )
@@ -290,15 +292,11 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 
 
 func dataReceiver(w http.ResponseWriter, r *http.Request) {
-
-	// w.Header().Set("Access-Control-Allow-Origin", "*")
-	// w.Header().Set("Content-Type", "application/json")
-
 	// 負荷テスト終了後に各パラメータのデータを取得
-	// fmt.Printf("total_request: %d\n", total_queue)
-	// fmt.Printf("queue_transition: %d\n", current_queue)
-	// fmt.Printf("total_data: %d\n", data)
-	// fmt.Printf("total_weight: %d\n", weight)
+	fmt.Printf("total_request: %d\n", total_queue)
+	fmt.Printf("queue_transition: %d\n", current_queue)
+	fmt.Printf("total_data: %d\n", data)
+	fmt.Printf("total_weight: %d\n", weight)
 
 	// 本来ならクラスタごとのデータを取得したい
 	for i := 0; i < len(clusterLBs); i++ {
@@ -324,8 +322,8 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// --------
-	filename := "./log/output.csv"
-	file, err := os.Create(filename)
+	// filename := "../log/output.csv"
+	file, err := os.Create(logFile)
 	if err != nil {
 		fmt.Println("failure creating csv file:", err)
 		return
@@ -387,9 +385,9 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	}
 	// --------
 	w.Header().Set("Content-Type", "text/csv")
-	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+	w.Header().Set("Content-Disposition", "attachment; filename="+logFile)
 
-	http.ServeFile(w, r, filename)
+	http.ServeFile(w, r, logFile)
 
 	final = true
 	// os.Exit(1)
