@@ -125,8 +125,6 @@ const (
 	sleepTime time.Duration = 1
 	getDataTime time.Duration = 100
 
-	// kappa float64 = 0.2
-
 	redisHost  = "114.51.4.7:6379"
 	redisKey   = "ready:"
 	leaderLB   = "114.51.4.2"
