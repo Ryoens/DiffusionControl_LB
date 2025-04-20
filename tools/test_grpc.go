@@ -87,6 +87,7 @@ var (
 	ownClusterLB string
 	isLeader bool
 	flushOnStartup = false
+	isTransport bool
 
 	rdb = redis.NewClient(&redis.Options{
 		Addr: "114.51.4.7:6379",
@@ -293,13 +294,8 @@ func main(){
 				transport = append(transport, server.Transport)
 			}
 	
-			// time.Sleep(getDataTime * time.Millisecond) // ms
+			time.Sleep(getDataTime * time.Millisecond) // ms
 			// time.Sleep(time.Duration(sleep_time) * time.Second) // s
-			
-			// test
-			queue++
-			fmt.Println(queue)
-			time.Sleep(time.Duration(sleepTime) * time.Second)
 		}
 	}()
 
@@ -308,6 +304,7 @@ func main(){
 
 // リクエストをweighted RRで処理
 func lbHandler(w http.ResponseWriter, r *http.Request) {
+	isTransport = false
 	mutex.Lock()
 	totalQueue++
 	queue++ // 処理待ちセッション数をインクリメント
@@ -320,7 +317,31 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 
 	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
 
-	if queue > threshold {
+	// 閾値が0以上のとき
+	if threshold > 0 {
+		tempWeight := 0
+		for _, info := range clusterLBs {
+			tempWeight = queue - info.Data
+			fmt.Println(tempWeight, queue, info.Data, threshold)
+			if tempWeight > threshold {
+				mutex.Lock()
+				isTransport = true
+				mutex.Unlock()
+			}
+		}
+	} else {
+		for _, info := range clusterLBs {
+			if info.Weight > 0 {
+				mutex.Lock()
+				isTransport = true
+				mutex.Unlock()
+				fmt.Println(queue, info.Data, info.Weight)
+				break
+			}
+		}
+	}
+
+	if isTransport {
 		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
 		proxyURL.Host = WeightedRoundRobin_AdjacentLB()
 
