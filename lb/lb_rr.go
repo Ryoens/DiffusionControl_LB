@@ -2,16 +2,12 @@
 package main
 
 import (
-	// "context"
+	"context"
 	"encoding/json"
 	"fmt"
 	"flag"
-	// "io"
 	"io/ioutil"
 	"log"
-	// "math"
-	// "math/rand"
-	// "net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -21,26 +17,27 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
-type Server struct {
-	IP     string
+type LoadBalancer struct {
+	ID int
+	Address string
+	Transport int
+}
+
+type webServer struct {
+	IP string
 	Sessions int
-	// 追加で各webサーバが持つセッション数を入れるかも
 }
 
 type Cluster struct {
-	Cluster_LB string `json:"cluster_lb"`
-	Web0       string `json:"web0"`
-	Web1       string `json:"web1"`
-	Web2       string `json:"web2"`
+	Cluster_LB string `json:"Cluster_LB"`
+	Webs map[string]string
 }
 
-type LoadBalancer struct {
-	Address   string
-	transport int
-}
-
+// 集計データに関して(Response, splitData)
 type Response struct {
 	TotalQueue []int // 総リクエスト数
 	CurrentQueue []int // セッション数
@@ -49,87 +46,114 @@ type Response struct {
 	Transport []int
 }
 
-type Split_data struct {
-	Data []int
-	Weight []int
+type splitData struct {
 	Transport []int
 }
 
-// グローバル変数の定義
 var (
-	proxyIPs = []Server{
-		{"", 0},
-		{"", 0},
-		{"", 0},
-	}
+	clusterLBs []LoadBalancer
+	webServers []webServer
+	ownWebServers []string
+	randomIndex webServer
 
-	clusterLBs []LoadBalancer // 隣接リスト
+	wg sync.WaitGroup
+	mutex sync.RWMutex
 
-	randomIndex  Server
-	my_clusterLB string
-	BackendIndex int // RR方式におけるインデックス
-	AdjacentIndex int 
-	wg           sync.WaitGroup
-	mutex        sync.RWMutex
+	ctx        = context.Background()
+	redisClient *redis.Client
+	totalLBs int
+	backendIndex int // RR方式におけるインデックス
+	adjacentIndex int
+	ownClusterLB string
+	isLeader bool
+	flushOnStartup = false
+
+	rdb = redis.NewClient(&redis.Options{
+		Addr: "114.51.4.7:6379",
+		DB:   0,
+	})
 
 	// 評価用パラメータ
 	queue        int // 処理待ちTCPセッション数
-	total_queue int // LBに入ってきた全てのリクエスト
-	res_count    int // レスポンス返却した数をカウント	
-	web_count int // 内部のwebサーバにてレスポンス返却した数
-	current_transport int // リバースプロキシで隣接LBに転送した数
+	totalQueue int // LBに入ってきた全てのリクエスト
+	responseCount    int // レスポンス返却した数をカウント	
+	webResponseCount int // 内部のwebサーバにてレスポンス返却した数
+	currentTransport int // リバースプロキシで隣接LBに転送した数
 
-	total_data []int // 
-	current_queue []int
-	current_response []int
-	total_transport []int
+	totalData []int // 
+	currentQueue []int
+	currentResponse []int
+	totalTransport []int
+
+	// 隣接LBごとに取得するフィードバック情報
+	data []int
+	weight []int
 	transport []int
 
 	final bool
-	transport_dest bool
 	threshold int
 )
 
 const (
-	// 固定値の定義
-	tcp_port   string  = ":8001"
-	sub_port   string  = ":8002"
-	dst_port   string  = ":80"    // webサーバ用
-	sleep_time time.Duration = 1
-	getdata_time time.Duration = 100
+	tcpPort   string  = ":8001"
+	subPort   string  = ":8002"
+	dstPort   string  = ":80"    // webサーバ用
+	sleepTime time.Duration = 1
+	getDataTime time.Duration = 100
 
 	logFile = "./log/output.csv"
+
+	redisHost  = "114.51.4.7:6379"
+	redisKey   = "ready:"
+	leaderLB   = "114.51.4.2"
+	syncChan   = "sync_start"
 )
 
-func init() {
+func init(){
 	// 引数の取得
 	q := flag.Int("q", 0, "threshold")
 
 	flag.Parse()
     threshold = *q
 
-	fmt.Printf("threshold -q : %d\n", threshold)
+    fmt.Printf("threshold -q : %d\n", threshold)
 
-	// JSONファイルを開く
-	file, err := os.Open("../json/config.json")
+	// open json file 
+	file, err := os.Open("./json/config.json")
 	if err != nil {
 		log.Fatalf("Failed to open file: %v", err)
 	}
 	defer file.Close()
 
-	// JSONファイルの内容を読み込む
+	// read json file
 	value, err := ioutil.ReadAll(file)
 	if err != nil {
 		log.Fatalf("Failed to read file: %v", err)
 	}
 
-	var clusters map[string]Cluster
-	err = json.Unmarshal(value, &clusters)
-	if err != nil {
+	var raw map[string]map[string]string
+	if err := json.Unmarshal(value, &raw); err != nil {
 		log.Fatalf("Failed to unmarshal JSON: %v", err)
 	}
 
-	// hostname -i を実行
+	clusters := make(map[string]Cluster)
+	for name, values := range raw {
+		cluster := Cluster{
+			Webs: make(map[string]string),
+		}
+		for k, v := range values {
+			if k == "cluster_lb" {
+				cluster.Cluster_LB = v
+			} else if strings.HasPrefix(k, "web") {
+				cluster.Webs[k] = v
+			}
+		}
+		clusters[name] = cluster
+	}
+
+	totalLBs = len(clusters)
+
+	// execute "hostname -i"
 	cmd := exec.Command("hostname", "-i")
 	output, err := cmd.Output()
 	if err != nil {
@@ -137,34 +161,43 @@ func init() {
 		return
 	}
 
-	// 出力結果をスペースで分割し、配列に代入
+	// split output results by spaces and assign to array
 	ip_addresses := strings.Fields(string(output))
+	// take own Cluster_LB IP address
+	ownClusterLB = ip_addresses[1]
 
-	// 自身のCluster_LBのIPアドレスを抽出
-	clusterLB := ip_addresses[1] // 最初のIPアドレスを取得
+	fmt.Println(totalLBs, ownClusterLB)
 
-	transport = make([]int, len(clusterLBs))
-
-	// 各クラスタのLBのIPアドレスと照合
+	var id int
 	for _, cluster := range clusters {
-		if clusterLB != cluster.Cluster_LB {
-			// 各クラスタLBのIPアドレスをリストに追加
-			clusterLBs = append(clusterLBs, LoadBalancer{
-				Address:   cluster.Cluster_LB,
-				transport: 0, 
-			})
+		if cluster.Cluster_LB == ownClusterLB {
+			// 自クラスタの Web サーバを抽出
+			for key, ip := range cluster.Webs {
+				if strings.HasPrefix(key, "web") {
+					ownWebServers = append(ownWebServers, ip)
+				}
+			}
 		} else {
-			// proxyIPsにサーバ情報を設定
-			proxyIPs[0].IP = cluster.Web0
-			proxyIPs[1].IP = cluster.Web1
-			proxyIPs[2].IP = cluster.Web2
-			my_clusterLB = cluster.Cluster_LB
+			// 他クラスタの LB を clusterLBs に追加
+			clusterLBs = append(clusterLBs, LoadBalancer{
+				ID:        id,
+				Address:   cluster.Cluster_LB,
+				Transport: 0,
+			})
+			id++
 		}
 	}
 
-	// デバック用
-	// Cluster2の場合: 10.0.3.10 10.0.3.11 10.0.3.12 114.51.4.4 [114.51.4.2 114.51.4.3]
-	fmt.Println(proxyIPs[0].IP, proxyIPs[1].IP, proxyIPs[2].IP, my_clusterLB, clusterLBs)
+	for _, web := range ownWebServers {
+		webServers = append(webServers, webServer{
+			IP: web,
+			Sessions: 0,
+		})
+	}
+
+	fmt.Println(clusterLBs, ownWebServers, webServers)
+	isLeader = ownClusterLB == leaderLB // リーダーLBだけ true にする
+	waitForAllLBsAndSyncStart(ctx, rdb, ownClusterLB, totalLBs, isLeader, "lb_ready:")
 }
 
 func main(){
@@ -172,11 +205,11 @@ func main(){
 	go func() {
 		defer wg.Done()
 		s := http.Server{
-			Addr:    tcp_port,
+			Addr:    tcpPort,
 			Handler: http.HandlerFunc(lbHandler),
 		}
 
-		fmt.Printf("HTTP server is listening on %s...\n", tcp_port)
+		fmt.Printf("HTTP server is listening on %s...\n", tcpPort)
 		if err := s.ListenAndServe(); err != nil {
 			log.Fatal(err.Error())
 		}
@@ -186,11 +219,11 @@ func main(){
 	go func() {
 		defer wg.Done()
 		s := http.Server{
-			Addr:    sub_port,
+			Addr:    subPort,
 			Handler: http.HandlerFunc(dataReceiver),
 		}
 
-		fmt.Printf("HTTP server is listening on %s...\n", sub_port)
+		fmt.Printf("HTTP server is listening on %s...\n", subPort)
 		if err := s.ListenAndServe(); err != nil {
 			log.Fatal(err.Error())
 		}
@@ -199,37 +232,32 @@ func main(){
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		getData()
+		for {
+			if final {
+				os.Exit(1)
+			}
+	
+			totalData = append(totalData, totalQueue)
+			currentQueue = append(currentQueue, queue)
+			currentResponse = append(currentResponse, responseCount)
+			totalTransport = append(totalTransport, currentTransport)
+	
+			for _, server := range clusterLBs {
+				transport = append(transport, server.Transport)
+			}
+	
+			time.Sleep(getDataTime * time.Millisecond) // ms
+			// time.Sleep(time.Duration(sleep_time) * time.Second) // s
+		}
 	}()
 
 	wg.Wait()
 }
 
-func getData() {
-	for {
-		if final {
-			os.Exit(1)
-		}
-
-		total_data = append(total_data, total_queue)
-		current_queue = append(current_queue, queue)
-		current_response = append(current_response, res_count)
-		// web_response = append(web_response, web_count)
-		total_transport = append(total_transport, current_transport)
-
-		for _, server := range clusterLBs {
-			transport = append(transport, server.transport)
-		}
-
-		time.Sleep(getdata_time * time.Millisecond) // ms
-		// time.Sleep(time.Duration(sleep_time) * time.Second) // s
-	}
-}
-
 // リクエストをweighted RRで処理
 func lbHandler(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
-	total_queue++
+	totalQueue++
 	queue++ // 処理待ちセッション数をインクリメント
 	mutex.Unlock()
 
@@ -238,74 +266,87 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		Host:   "",
 	}
 
-	// リバースプロキシを作成
 	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
 
 	if queue > threshold {
 		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
 		randomIndex = RoundRobin_AdjacentLB()
-		proxyURL.Host = randomIndex.IP + tcp_port
+		proxyURL.Host = randomIndex.IP + tcpPort
 
 		proxy.ModifyResponse = func(res *http.Response) error {
 			mutex.Lock()
 			queue-- // 処理完了後にデクリメント
-			current_transport++
+			currentTransport++
 			mutex.Unlock()
 			return nil
 		}
-		
 	} else {
 		randomIndex = RoundRobin_Backend()
-		proxyURL.Host = randomIndex.IP + dst_port
+		proxyURL.Host = randomIndex.IP + dstPort
 
 		// レスポンスを書き換える -> 内部のwebサーバへ送る場合
 		proxy.ModifyResponse = func(res *http.Response) error {
 			mutex.Lock()
 			queue-- // 処理完了後にデクリメント
-			res_count++ 
+			responseCount++ 
 			mutex.Unlock()
 			return nil
 		}
 	}
-	// レスポンス返却までに遅延を設定?
-	// time.Sleep(time.Duration(feedback) * time.Millisecond)
-
-	// リバースプロキシで各転送先へリクエスト移譲
-	proxy.ServeHTTP(w, r) // webサーバからレスポンス返却でres_countがインクリメント
-	//fmt.Println(queue, res_count, current_transport)
+	fmt.Println(randomIndex) // for debug
+	proxy.ServeHTTP(w, r)
 }
 
+// クラスタ間でのラウンドロビン(隣接LBへの振り分け)
+func RoundRobin_AdjacentLB() webServer {
+	extenal := clusterLBs[adjacentIndex]
+	adjacentIndex = (adjacentIndex + 1) % len(clusterLBs)
+
+	// external: LoadBalancer型 -> webServer型に変換
+	return webServer{
+		IP:       extenal.Address,
+		Sessions: extenal.Transport,
+	}
+}
+
+// クラスタ内でのラウンドロビン(バックエンドサーバへの振り分け)
+func RoundRobin_Backend() webServer {
+	webServers[backendIndex].Sessions++
+	internal := webServers[backendIndex]
+	backendIndex = (backendIndex + 1) % len(webServers)
+
+	return internal
+}
+
+// dataReceiver()
 func dataReceiver(w http.ResponseWriter, r *http.Request) {
-	// 現在のセッション数を取得
-	// last_sessions := queue
-	// last_response := res_count
-	
 	// 負荷テスト終了後に各パラメータのデータを取得
-	fmt.Printf("total_request: %d\n", total_queue)
-	fmt.Printf("queue_transition: %d\n", current_queue)
-	
+	fmt.Printf("total_request: %d\n", totalQueue)
+	fmt.Printf("queue_transition: %d\n", currentQueue)
+	fmt.Printf("total_data: %d\n", data)
+	fmt.Printf("total_weight: %d\n", weight)
+
 	// 本来ならクラスタごとのデータを取得したい
 	for i := 0; i < len(clusterLBs); i++ {
-		fmt.Printf("amount of transport(%s): %d\n", clusterLBs[i].Address, clusterLBs[i].transport)
+		fmt.Printf("amount of transport(%s): %d\n", clusterLBs[i].Address, clusterLBs[i].Transport)
 	}
 
-	clusters := make([]Split_data, len(clusterLBs))
+	clusters := make([]splitData, len(clusterLBs))
 
-	for i := 0; i < len(transport); i++ {
+	for i := 0; i < len(data); i++ {
 		clusterIndex := i % len(clusterLBs)
 		clusters[clusterIndex].Transport = append(clusters[clusterIndex].Transport, transport[i])
 	}
 
 	response := Response{
-		TotalQueue: total_data,
-		CurrentQueue: current_queue,
-		CurrentResponse: current_response,
-		CurrentTransport: total_transport,
+		TotalQueue: totalData,
+		CurrentQueue: currentQueue,
+		CurrentResponse: currentResponse,
+		CurrentTransport: totalTransport,
 		Transport: transport,
 	}
 
 	// --------
-	// filename := "../log/output.csv"
 	file, err := os.Create(logFile)
 	if err != nil {
 		fmt.Println("failure creating csv file:", err)
@@ -318,6 +359,12 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	header = append(header, "CurrentQueue")
 	header = append(header, "CurrentResponse")
 	header = append(header, "CurrentTransport")
+	for i := 0; i < len(clusterLBs); i++ {
+		header = append(header, fmt.Sprintf("%d_Data", i))
+	}
+	for i := 0; i < len(clusterLBs); i++ {
+		header = append(header, fmt.Sprintf("%d_Weight", i))
+	}
 	for i := 0; i < len(clusterLBs); i++ {
 		header = append(header, fmt.Sprintf("%d_Transport", i))
 	}
@@ -356,9 +403,9 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, logFile)
 
 	final = true
-	// os.Exit(1)
 } 
 
+// joinWeight()
 // ウェイトのスライスをカンマ区切りの文字列に変換するヘルパー関数
 func joinWeight(weight []int) string {
 	var result strings.Builder
@@ -371,23 +418,58 @@ func joinWeight(weight []int) string {
 	return result.String()
 }
 
-// クラスタ間でのラウンドロビン(隣接LBへの振り分け)
-func RoundRobin_AdjacentLB() Server {
-	extenal := clusterLBs[AdjacentIndex]
-	AdjacentIndex = (AdjacentIndex + 1) % len(clusterLBs)
+func waitForAllLBsAndSyncStart(ctx context.Context, rdb *redis.Client, ownClusterLB string, totalLBs int, isLeader bool, redisKey string) {
+	// redisKey := "lb_ready:"
+	pubsubChannel := "sync_start"
 
-	// external: LoadBalancer型 -> Server型に変換
-	return Server{
-		IP:       extenal.Address,
-		Sessions: extenal.transport,
+	// 自分の準備完了を通知
+	if err := rdb.Set(ctx, redisKey+ownClusterLB, "true", 0).Err(); err != nil {
+		log.Fatalf("Redis SET failed: %v", err)
 	}
-}
+	fmt.Println("LB Ready sent:", redisKey+ownClusterLB)
 
-// クラスタ内でのラウンドロビン(バックエンドサーバへの振り分け)
-func RoundRobin_Backend() Server {
-	// proxyIPs[currentIndex].Sessions++
-	internal := proxyIPs[BackendIndex]
-	BackendIndex = (BackendIndex + 1) % len(proxyIPs)
+	// sync_start 購読（リーダーも含めて全LBが購読）
+	sub := rdb.Subscribe(ctx, pubsubChannel)
+	defer sub.Close()
 
-	return internal
+	// 最初のメッセージ受信を準備
+	_, err := sub.Receive(ctx)
+	if err != nil {
+		log.Fatalf("Failed to subscribe to %s: %v", pubsubChannel, err)
+	}
+	ch := sub.Channel()
+
+	if isLeader {
+		// リーダーの役割：準備が揃ったらsync_startを発信
+		fmt.Println("Coordinator waiting for all LB readiness...")
+		for {
+			keys, err := rdb.Keys(ctx, redisKey+"*").Result()
+			if err != nil {
+				log.Printf("Redis KEYS error: %v", err)
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			if len(keys) == totalLBs {
+				fmt.Printf("%d/%d ready. Publishing sync_start...\n", len(keys), totalLBs)
+				break
+			}
+			fmt.Printf("%d/%d ready\n", len(keys), totalLBs)
+			time.Sleep(1 * time.Second)
+		}
+
+		// sync_start メッセージ送信
+		err := rdb.Publish(ctx, pubsubChannel, "start").Err()
+		if err != nil {
+			log.Fatalf("Failed to publish sync_start: %v", err)
+		}
+	}
+
+	// 全員 sync_start を待つ（リーダーも含む）
+	fmt.Println("Waiting for sync_start signal...")
+	for msg := range ch {
+		if msg.Payload == "start" {
+			fmt.Println("Received sync_start signal. Proceeding to main.")
+			break
+		}
+	}
 }

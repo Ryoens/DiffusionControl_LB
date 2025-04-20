@@ -2,19 +2,21 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"math"
-	"net"
+	"flag"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
-	"context"
-	"log"
-	"io/ioutil"
 	"strings"
 	"strconv"
-	"time"
 	"sync"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -22,38 +24,84 @@ import (
 type LoadBalancer struct {
 	ID int
 	Address string
-	IsHealthy bool // ヘルスチェック用
-	Data int
-	Weight int
+	Transport int
+}
+
+type webServer struct {
+	IP string
+	Sessions int
 }
 
 type Cluster struct {
 	Cluster_LB string `json:"Cluster_LB"`
+	Webs map[string]string
+}
+
+// 集計データに関して(Response, splitData)
+type Response struct {
+	TotalQueue []int // 総リクエスト数
+	CurrentQueue []int // セッション数
+	CurrentResponse []int // レスポンス数
+	CurrentTransport []int // 転送数
+	Transport []int
+}
+
+type splitData struct {
+	Transport []int
 }
 
 var (
 	clusterLBs []LoadBalancer
-	queue int
+	webServers []webServer
+	ownWebServers []string
+	randomIndex webServer
+
 	wg sync.WaitGroup
 	mutex sync.RWMutex
 
 	ctx        = context.Background()
 	redisClient *redis.Client
-	flushOnStartup = false
 	totalLBs int
+	backendIndex int // RR方式におけるインデックス
+	adjacentIndex int
 	ownClusterLB string
 	isLeader bool
+	flushOnStartup = false
 
 	rdb = redis.NewClient(&redis.Options{
 		Addr: "114.51.4.7:6379",
 		DB:   0,
 	})
+
+	// 評価用パラメータ
+	queue        int // 処理待ちTCPセッション数
+	totalQueue int // LBに入ってきた全てのリクエスト
+	responseCount    int // レスポンス返却した数をカウント	
+	webResponseCount int // 内部のwebサーバにてレスポンス返却した数
+	currentTransport int // リバースプロキシで隣接LBに転送した数
+
+	totalData []int // 
+	currentQueue []int
+	currentResponse []int
+	totalTransport []int
+
+	// 隣接LBごとに取得するフィードバック情報
+	data []int
+	weight []int
+	transport []int
+
+	final bool
+	threshold int
 )
 
 const (
-	socketPort string = ":8001"
-	sleepTime int     = 1
-	kappa float64 = 0.2
+	tcpPort   string  = ":8001"
+	subPort   string  = ":8002"
+	dstPort   string  = ":80"    // webサーバ用
+	sleepTime time.Duration = 1
+	getDataTime time.Duration = 100
+
+	logFile = "./log/output.csv"
 
 	redisHost  = "114.51.4.7:6379"
 	redisKey   = "ready:"
@@ -62,6 +110,14 @@ const (
 )
 
 func init(){
+	// 引数の取得
+	q := flag.Int("q", 0, "threshold")
+
+	flag.Parse()
+    threshold = *q
+
+    fmt.Printf("threshold -q : %d\n", threshold)
+
 	// open json file 
 	file, err := os.Open("./json/config.json")
 	if err != nil {
@@ -69,15 +125,30 @@ func init(){
 	}
 	defer file.Close()
 
+	// read json file
 	value, err := ioutil.ReadAll(file)
 	if err != nil {
 		log.Fatalf("Failed to read file: %v", err)
 	}
 
-	var clusters map[string]Cluster
-	err = json.Unmarshal(value, &clusters)
-	if err != nil {
+	var raw map[string]map[string]string
+	if err := json.Unmarshal(value, &raw); err != nil {
 		log.Fatalf("Failed to unmarshal JSON: %v", err)
+	}
+
+	clusters := make(map[string]Cluster)
+	for name, values := range raw {
+		cluster := Cluster{
+			Webs: make(map[string]string),
+		}
+		for k, v := range values {
+			if k == "cluster_lb" {
+				cluster.Cluster_LB = v
+			} else if strings.HasPrefix(k, "web") {
+				cluster.Webs[k] = v
+			}
+		}
+		clusters[name] = cluster
 	}
 
 	totalLBs = len(clusters)
@@ -93,32 +164,258 @@ func init(){
 	// split output results by spaces and assign to array
 	ip_addresses := strings.Fields(string(output))
 	// take own Cluster_LB IP address
-	ownClusterLB := ip_addresses[1]
+	ownClusterLB = ip_addresses[1]
 
-	fmt.Println(len(clusters)) // display all number of LB
+	fmt.Println(totalLBs, ownClusterLB)
 
-	// match with IP address of each Cluster_LB
 	var id int
-	for i, cluster := range clusters {
-		if ownClusterLB != cluster.Cluster_LB {
-			// add the IP address of each Cluster_LB to the list
-			fmt.Printf("%v(%T) %v(%T)\n", i, i, cluster, cluster)
+	for _, cluster := range clusters {
+		if cluster.Cluster_LB == ownClusterLB {
+			// 自クラスタの Web サーバを抽出
+			for key, ip := range cluster.Webs {
+				if strings.HasPrefix(key, "web") {
+					ownWebServers = append(ownWebServers, ip)
+				}
+			}
+		} else {
+			// 他クラスタの LB を clusterLBs に追加
 			clusterLBs = append(clusterLBs, LoadBalancer{
-				ID: id,
-				Address: cluster.Cluster_LB, 
-				IsHealthy: true, // temporary
-				Data: 0,
-				Weight: 0,
+				ID:        id,
+				Address:   cluster.Cluster_LB,
+				Transport: 0,
 			})
 			id++
 		}
 	}
 
-	fmt.Println(ownClusterLB, clusterLBs) // for debug
+	for _, web := range ownWebServers {
+		webServers = append(webServers, webServer{
+			IP: web,
+			Sessions: 0,
+		})
+	}
 
-	// できればここで時刻に応じてLBを実行(mainに移行)する処理を書きたい
+	fmt.Println(clusterLBs, ownWebServers, webServers)
 	isLeader = ownClusterLB == leaderLB // リーダーLBだけ true にする
 	waitForAllLBsAndSyncStart(ctx, rdb, ownClusterLB, totalLBs, isLeader, "lb_ready:")
+}
+
+func main(){
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s := http.Server{
+			Addr:    tcpPort,
+			Handler: http.HandlerFunc(lbHandler),
+		}
+
+		fmt.Printf("HTTP server is listening on %s...\n", tcpPort)
+		if err := s.ListenAndServe(); err != nil {
+			log.Fatal(err.Error())
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s := http.Server{
+			Addr:    subPort,
+			Handler: http.HandlerFunc(dataReceiver),
+		}
+
+		fmt.Printf("HTTP server is listening on %s...\n", subPort)
+		if err := s.ListenAndServe(); err != nil {
+			log.Fatal(err.Error())
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			if final {
+				os.Exit(1)
+			}
+	
+			totalData = append(totalData, totalQueue)
+			currentQueue = append(currentQueue, queue)
+			currentResponse = append(currentResponse, responseCount)
+			totalTransport = append(totalTransport, currentTransport)
+	
+			for _, server := range clusterLBs {
+				transport = append(transport, server.Transport)
+			}
+	
+			time.Sleep(getDataTime * time.Millisecond) // ms
+			// time.Sleep(time.Duration(sleep_time) * time.Second) // s
+		}
+	}()
+
+	wg.Wait()
+}
+
+// リクエストをweighted RRで処理
+func lbHandler(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	totalQueue++
+	queue++ // 処理待ちセッション数をインクリメント
+	mutex.Unlock()
+
+	proxyURL := &url.URL{
+		Scheme: "http",
+		Host:   "",
+	}
+
+	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
+
+	if queue > threshold {
+		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
+		randomIndex = RoundRobin_AdjacentLB()
+		proxyURL.Host = randomIndex.IP + tcpPort
+
+		proxy.ModifyResponse = func(res *http.Response) error {
+			mutex.Lock()
+			queue-- // 処理完了後にデクリメント
+			currentTransport++
+			mutex.Unlock()
+			return nil
+		}
+	} else {
+		randomIndex = RoundRobin_Backend()
+		proxyURL.Host = randomIndex.IP + dstPort
+
+		// レスポンスを書き換える -> 内部のwebサーバへ送る場合
+		proxy.ModifyResponse = func(res *http.Response) error {
+			mutex.Lock()
+			queue-- // 処理完了後にデクリメント
+			responseCount++ 
+			mutex.Unlock()
+			return nil
+		}
+	}
+	fmt.Println(randomIndex) // for debug
+	proxy.ServeHTTP(w, r)
+}
+
+// クラスタ間でのラウンドロビン(隣接LBへの振り分け)
+func RoundRobin_AdjacentLB() webServer {
+	extenal := clusterLBs[adjacentIndex]
+	adjacentIndex = (adjacentIndex + 1) % len(clusterLBs)
+
+	// external: LoadBalancer型 -> webServer型に変換
+	return webServer{
+		IP:       extenal.Address,
+		Sessions: extenal.Transport,
+	}
+}
+
+// クラスタ内でのラウンドロビン(バックエンドサーバへの振り分け)
+func RoundRobin_Backend() webServer {
+	webServers[backendIndex].Sessions++
+	internal := webServers[backendIndex]
+	backendIndex = (backendIndex + 1) % len(webServers)
+
+	return internal
+}
+
+// dataReceiver()
+func dataReceiver(w http.ResponseWriter, r *http.Request) {
+	// 負荷テスト終了後に各パラメータのデータを取得
+	fmt.Printf("total_request: %d\n", totalQueue)
+	fmt.Printf("queue_transition: %d\n", currentQueue)
+	fmt.Printf("total_data: %d\n", data)
+	fmt.Printf("total_weight: %d\n", weight)
+
+	// 本来ならクラスタごとのデータを取得したい
+	for i := 0; i < len(clusterLBs); i++ {
+		fmt.Printf("amount of transport(%s): %d\n", clusterLBs[i].Address, clusterLBs[i].Transport)
+	}
+
+	clusters := make([]splitData, len(clusterLBs))
+
+	for i := 0; i < len(data); i++ {
+		clusterIndex := i % len(clusterLBs)
+		clusters[clusterIndex].Transport = append(clusters[clusterIndex].Transport, transport[i])
+	}
+
+	response := Response{
+		TotalQueue: totalData,
+		CurrentQueue: currentQueue,
+		CurrentResponse: currentResponse,
+		CurrentTransport: totalTransport,
+		Transport: transport,
+	}
+
+	// --------
+	file, err := os.Create(logFile)
+	if err != nil {
+		fmt.Println("failure creating csv file:", err)
+		return
+	}
+	defer file.Close()
+
+	var csvData strings.Builder
+	header := []string{"TotalQueue"}
+	header = append(header, "CurrentQueue")
+	header = append(header, "CurrentResponse")
+	header = append(header, "CurrentTransport")
+	for i := 0; i < len(clusterLBs); i++ {
+		header = append(header, fmt.Sprintf("%d_Data", i))
+	}
+	for i := 0; i < len(clusterLBs); i++ {
+		header = append(header, fmt.Sprintf("%d_Weight", i))
+	}
+	for i := 0; i < len(clusterLBs); i++ {
+		header = append(header, fmt.Sprintf("%d_Transport", i))
+	}
+	
+	// パラメータが増えた場合はcsv出力としてここで追加する
+	csvData.WriteString(strings.Join(header, ",") + "\n")
+
+	rowCount := len(response.CurrentQueue)
+
+	for i := 0; i < rowCount; i++ {
+		record := []string{fmt.Sprint(response.TotalQueue[i])}
+		record = append(record, strconv.Itoa(response.CurrentQueue[i]))
+		record = append(record, strconv.Itoa(response.CurrentResponse[i]))
+		record = append(record, strconv.Itoa(response.CurrentTransport[i]))
+		
+		for j := 0; j < len(clusterLBs); j++ {
+			if i < len(clusters[j].Transport) {
+				record = append(record, strconv.Itoa(clusters[j].Transport[i]))
+			} else {
+				record = append(record, "0") // 値がない場合は0を挿入
+			}
+		}
+
+		csvData.WriteString(strings.Join(record, ",") + "\n") 
+	}
+
+	_, err = file.WriteString(csvData.String())
+	if err != nil {
+		fmt.Println("Error writing to CSV file:", err)
+		return
+	}
+	// --------
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", "attachment; filename="+logFile)
+
+	http.ServeFile(w, r, logFile)
+
+	final = true
+} 
+
+// joinWeight()
+// ウェイトのスライスをカンマ区切りの文字列に変換するヘルパー関数
+func joinWeight(weight []int) string {
+	var result strings.Builder
+	for i, w := range weight {
+		if i > 0 {
+			result.WriteString(",")
+		}
+		result.WriteString(strconv.Itoa(w))
+	}
+	return result.String()
 }
 
 func waitForAllLBsAndSyncStart(ctx context.Context, rdb *redis.Client, ownClusterLB string, totalLBs int, isLeader bool, redisKey string) {
@@ -175,122 +472,4 @@ func waitForAllLBsAndSyncStart(ctx context.Context, rdb *redis.Client, ownCluste
 			break
 		}
 	}
-}
-
-func main(){
-
-	for {
-		queue++
-		fmt.Println(queue)
-		time.Sleep(time.Duration(sleepTime) * time.Second)
-	}
-	// wg.Add(1)
-	// go Socket_Server()
-
-	// for i, lb := range clusterLBs {
-	// 	wg.Add(1)
-	// 	go Socket_Client(lb, i)
-	// }
-
-	// wg.Add(1)
-	// go func(){
-	// 	defer wg.Done()
-
-	// 	for {
-	// 		queue++
-	// 		time.Sleep(time.Duration(sleepTime) * time.Second)
-	// 	}
-	// }()
-
-	// wg.Wait()
-}
-
-func Socket_Server(){
-	defer wg.Done()
-
-	addr, err := net.ResolveUDPAddr("udp", socketPort)
-	if err != nil {
-		fmt.Printf("Failed to resolve address: %v\n", err)
-		return
-	}
-
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		fmt.Printf("Failed to listen: %v\n", err)
-		return
-	}
-	defer conn.Close()
-
-	buffer := make([]byte, 1024)
-
-	for {
-		n, remoteAddr, _ := conn.ReadFromUDP(buffer)
-		msg := string(buffer[:n])
-		fmt.Printf("Received from %s: %s\n", remoteAddr, msg)
-	}
-}
-
-func Socket_Client(lb LoadBalancer, i int){
-	defer wg.Done()
-
-	addr, err := net.ResolveUDPAddr("udp", lb.Address + socketPort)
-	if err != nil {
-		fmt.Printf("LB %d: Failed to resolve address: %v\n", lb.ID, err)
-		return
-	}
-
-	conn, err := net.DialUDP("udp", nil, addr)
-	if err != nil {
-		fmt.Printf("LB %d: Failed to connect to server: %v\n", lb.ID, err)
-		return
-	}
-	defer conn.Close()
-
-	ticker := time.NewTicker(time.Duration(sleepTime) * time.Second)
-	defer ticker.Stop()
-
-	buffer := make([]byte, 1024)
-
-	for range ticker.C {
-		mutex.RLock()
-		msg := strconv.Itoa(queue)
-		mutex.RUnlock()
-
-		_, err := conn.Write([]byte(msg))
-		if err != nil {
-			fmt.Printf("Failed to send to %s: %v\n", lb.Address, err)
-			continue
-		}
-
-		data, _, err := conn.ReadFromUDP(buffer)
-		if err != nil {
-			fmt.Printf("No data: %v\n", err)
-			continue
-		}
-
-		tempData := string(buffer[:data])
-		temp_Data, err := strconv.Atoi(tempData)
-		if err != nil {
-			fmt.Println("failure get request", err)
-			continue
-		}
-		clusterLBs[i].Data = temp_Data
-		
-		Calculate(clusterLBs[i].Data, i)
-		fmt.Println("Socket_Client: ", lb.ID, lb.Address, msg)
-	}
-}
-
-func Calculate(next_queue int, num int) {
-	// calculate DC method
-	fmt.Printf("Calculate: %d(ID), %d(data)\n", num, next_queue)
-
-	if queue > next_queue {
-		diff := queue - next_queue
-		clusterLBs[num].Weight = int(math.Round(kappa * float64(diff)))
-	} else {
-		clusterLBs[num].Weight = 0
-	}
-
-	fmt.Printf("weight: %d\n", clusterLBs[num].Weight)
 }
