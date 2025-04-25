@@ -294,6 +294,8 @@ func main(){
 				transport = append(transport, server.Transport)
 			}
 	
+			fmt.Println(totalQueue, queue, responseCount, currentTransport)
+
 			time.Sleep(getDataTime * time.Millisecond) // ms
 			// time.Sleep(time.Duration(sleep_time) * time.Second) // s
 		}
@@ -365,6 +367,7 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 	}
+	fmt.Println(totalQueue, queue, responseCount, currentTransport)
 	proxy.ServeHTTP(w, r)
 }
 

@@ -516,7 +516,6 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 		mutex.Lock()
 		clusterLBs[num].Data = int(in.Payload)
 
-		// fmt.Println(clusterLBs[num].data, clusterLBs)
 		Calculate(clusterLBs[num].Data, num)
 		mutex.Unlock()
 	}

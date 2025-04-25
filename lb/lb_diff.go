@@ -195,7 +195,6 @@ func init(){
 	// take own Cluster_LB IP address
 	ownClusterLB = ip_addresses[1]
 
-	// fmt.Println(totalLBs, ownClusterLB, clusters)
 	fmt.Println(totalLBs, ownClusterLB)
 
 	var id int
@@ -207,10 +206,8 @@ func init(){
 					ownWebServers = append(ownWebServers, ip)
 				}
 			}
-			// fmt.Printf("自クラスタ (%s): Webサーバ: %v\n", name, ownWebServers)
 		} else {
 			// 他クラスタの LB を clusterLBs に追加
-			// fmt.Printf("%v(%T) %v(%T)\n", name, name, cluster, cluster)
 			clusterLBs = append(clusterLBs, LoadBalancer{
 				ID:        id,
 				Address:   cluster.Cluster_LB,
@@ -291,7 +288,7 @@ func main(){
 				weight = append(weight, server.Weight)
 				transport = append(transport, server.Transport)
 			}
-	
+
 			time.Sleep(getDataTime * time.Millisecond) // ms
 			// time.Sleep(time.Duration(sleep_time) * time.Second) // s
 		}
@@ -320,7 +317,6 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		tempWeight := 0
 		for _, info := range clusterLBs {
 			tempWeight = queue - info.Data
-			fmt.Println(tempWeight, queue, info.Data, threshold)
 			if tempWeight > threshold {
 				mutex.Lock()
 				isTransport = true
@@ -333,7 +329,6 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 				mutex.Lock()
 				isTransport = true
 				mutex.Unlock()
-				fmt.Println(queue, info.Data, info.Weight)
 				break
 			}
 		}
@@ -391,7 +386,6 @@ func WeightedRoundRobin_AdjacentLB() string {
 	rand.Seed(time.Now().UnixNano())
 	randomWeight := rand.Intn(totalWeight)
 
-	//fmt.Printf("totalWeight: %d, randomWeight: %d\n", totalWeight, randomWeight)
 	// 重みでサーバーを選択
 	for i, server := range clusterLBs {
 		if randomWeight < server.Weight {
@@ -546,7 +540,6 @@ func handleControlStream(client pb.LoadBalancerClient, address string, num int) 
 		mutex.Lock()
 		clusterLBs[num].Data = int(in.Payload)
 
-		// fmt.Println(clusterLBs[num].data, clusterLBs)
 		Calculate(clusterLBs[num].Data, num)
 		mutex.Unlock()
 	}
