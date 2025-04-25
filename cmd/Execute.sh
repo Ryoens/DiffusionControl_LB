@@ -2,6 +2,7 @@
 count=0
 attempt_count=1
 time=60
+source ~/.bashrc
 
 # 各パラメータの入力
 read -p "feedback [ms]: " feedback 
@@ -62,15 +63,12 @@ compiled_file="${apply_file%.go}"
 
 echo $apply_file $compiled_file
 
-# timestampディレクトリを作成
-timestamp_data=$(date +"%Y%m%d_%H%M%S")
-read -p "parameter to be changed:" type # request, threshold, kappa
-dirname="t${feedback}_t${threshold}_k${safe_kappa}_vus${vus}"
-# dirname="t${feedback}_k${safe_kappa}_vus${vus}"
-data_dir="../../data/${type}/${dirname}"
+# 計測結果の保存用ディレクトリ作成
+dirname="${compiled_file}_t${feedback}_t${threshold}_k${safe_kappa}_vus${vus}"
+data_dir="../../data/implement/${dirname}"
 mkdir -p "$data_dir"
 
-echo $timestamp $dirname $data_dir
+echo $dirname $data_dir
 count=0
 
 # nameserverの設定, build
@@ -90,57 +88,45 @@ do
 done
 
 sleep 5
-exit 1
 
 while [ $attempt_count -le $attempt ]
 do
     echo "-------- $attempt_count --------"
     count=0
 
-    # go run $file -t $feedback -q $threshold -k $kappa
-    # プログラムの実行 (gRPCが起動しない場合の挙動も必要) -> 仮想ブリッジの問題
-    # for文に変更 
-    # while [ $count -le $KEY ]
-    # for ((count=0; count<=KEY; count++));
     for count in $(seq 0 "$KEY");
     do
         docker exec -d Cluster${count}_LB ./$compiled_file -t $feedback -q $threshold -k $kappa /bin/bash
-        # docker exec -d Cluster${count}_LB go run $file -t $feedback -k $kappa /bin/bash
         docker exec Cluster${count}_LB ps aux # goのプロセスが走っていなかったらやり直しにしたい
-        # count=`expr $count + 1`
     done
 
     # 実験データの取得
-    # sleep 1
-    echo $vus
     # --------------------------
-    # 負荷テスト(apache bench, apache jmeter, curl, wrk, etc...)
-
-    # apache benchによる負荷テスト
-    timestamp=$(date +"%Y%m%d_%H%M%S")
-    # 時間指定: -t 60
-    ab -c $vus -n $req -k http://114.51.4.2:8001/ > "${data_dir}/result_${timestamp}.html"
-    wait
-    echo "All tests completed."
+    ## 負荷テスト(apache bench, apache jmeter, curl, wrk, etc...)
 
     # apache jmeterによる負荷テスト
-    ./jmeter.sh http://114.51.4.2:8001/ $time $vus
+    sh tools/jmeter.sh $url $time $vus
     wait
     echo "All tests completed."
 
     for num in $(seq 2 $((count + 1)))
     do 
-        i=$((num - 2)) 
+        i=$((num - 2)) # cluster 5台: i=0:4
         echo "Cluster$i" 
         timestamp=$(date +"%Y%m%d_%H%M%S")
         # 現在のディレクトリとは離れたところにデータを残す
-        curl -X GET 114.51.4.$num:8002 -o "${data_dir}/Cluster$i"_"$timestamp.csv"
+        curl -X GET 114.51.4.$num:8002 -o "${data_dir}/Cluster$i"_"$attempt_count"_"$timestamp.csv"
     done
 
-    attempt_count=`expr $attempt_count + 1`
-    rm ./log/output.csv
+    # 計測結果ファイルの移動
+    timestamp=$(date +"%Y%m%d_%H%M%S")
+    rm -f ./log/output.csv
+    mv tools/jmeter.log "${data_dir}/jmeter_${attempt_count}_${timestamp}.log"
+    mv tools/result_60s.jtl "${data_dir}/jmeter_result${time}s_${attempt_count}_${timestamp}.jtl"
+
     docker exec -it redis-server redis-cli flushall # rediskeyの初期化
-    sleep 10
+    attempt_count=`expr $attempt_count + 1`
+    sleep 5
 done
 
 # パラメータなどをファイルに書き出し
@@ -151,5 +137,4 @@ echo "feedback: $feedback [ms]"
 echo "threshold: $threshold"
 echo "kappa: $kappa"
 echo "virtual users: $vus [users]"
-echo "total requests: $req [requests]"
 } > "${data_dir}/parameters"_"$timestamp".txt
