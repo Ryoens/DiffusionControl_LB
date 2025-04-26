@@ -121,8 +121,8 @@ do
     # 計測結果ファイルの移動
     timestamp=$(date +"%Y%m%d_%H%M%S")
     rm -f ./log/output.csv
-    mv tools/jmeter.log "${data_dir}/jmeter_${attempt_count}_${timestamp}.log"
-    mv tools/result_60s.jtl "${data_dir}/jmeter_result${time}s_${attempt_count}_${timestamp}.jtl"
+    mv ./log/jmeter.log "${data_dir}/jmeter_${attempt_count}_${timestamp}.log"
+    mv ./log/result_60s.jtl "${data_dir}/jmeter_result${time}s_${attempt_count}_${timestamp}.jtl"
 
     docker exec -it redis-server redis-cli flushall # rediskeyの初期化
     attempt_count=`expr $attempt_count + 1`

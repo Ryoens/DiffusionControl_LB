@@ -62,4 +62,4 @@ EOF
 # JMeter テスト実行
 # ----------------------
 echo "Running JMeter test against $TARGET_URL for ${DURATION_SEC}s with ${THREADS} threads..."
-jmeter -n -t temp_test.jmx -l result_${DURATION_SEC}s.jtl -j log/jmeter.log -Jxstream.security.allow=com.thoughtworks.xstream.security.AnyTypePermission
+jmeter -n -t temp_test.jmx -l ../log/result_${DURATION_SEC}s.jtl -j ../log/jmeter.log -Jxstream.security.allow=com.thoughtworks.xstream.security.AnyTypePermission
