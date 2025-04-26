@@ -94,12 +94,20 @@ var (
 		DB:   0,
 	})
 
+	transportSet = &http.Transport{
+		MaxIdleConns:        1000,
+		MaxIdleConnsPerHost: 1000,
+		IdleConnTimeout:     90 * time.Second,
+	}
+
 	// 評価用パラメータ
 	queue        int // 処理待ちTCPセッション数
 	totalQueue int // LBに入ってきた全てのリクエスト
 	responseCount    int // レスポンス返却した数をカウント	
 	webResponseCount int // 内部のwebサーバにてレスポンス返却した数
 	currentTransport int // リバースプロキシで隣接LBに転送した数
+	firstReceivedCount int // 隣接LBからダイレクトに受け取ったリクエスト数
+	adjacentQueueCount int // マルチホップしたリクエスト
 
 	totalData []int // 
 	currentQueue []int
@@ -288,7 +296,7 @@ func main(){
 				weight = append(weight, server.Weight)
 				transport = append(transport, server.Transport)
 			}
-
+			fmt.Println(totalQueue, queue, responseCount, firstReceivedCount, adjacentQueueCount, currentTransport) // for debug
 			time.Sleep(getDataTime * time.Millisecond) // ms
 			// time.Sleep(time.Duration(sleep_time) * time.Second) // s
 		}
@@ -302,7 +310,19 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 	isTransport = false
 	mutex.Lock()
 	totalQueue++
-	queue++ // 処理待ちセッション数をインクリメント
+	queue++ // 処理待ちセッション数を共通でインクリメント
+
+	originalLB := r.Header.Get("X-Original-LB")
+	if originalLB == "" {
+		// fmt.Println("source: external user")
+	} else if originalLB == "114.51.4.2" {
+		// fmt.Println("source LB address:", originalLB)
+		firstReceivedCount++
+	} else {
+		// fmt.Println("source adjacentLB address:", originalLB)
+		adjacentQueueCount++
+	}
+
 	mutex.Unlock()
 
 	proxyURL := &url.URL{
@@ -311,6 +331,7 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
+	proxy.Transport = transportSet
 
 	// 閾値が0以上のとき
 	if threshold > 0 {
@@ -337,6 +358,12 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 	if isTransport {
 		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
 		proxyURL.Host = WeightedRoundRobin_AdjacentLB()
+
+		originalDirector := proxy.Director
+		proxy.Director = func(req *http.Request) {
+			originalDirector(req)
+			req.Header.Set("X-Original-LB", ownClusterLB)
+		}
 
 		proxy.ModifyResponse = func(res *http.Response) error {
 			mutex.Lock()
