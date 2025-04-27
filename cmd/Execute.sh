@@ -96,20 +96,22 @@ do
 
     for count in $(seq 0 "$KEY");
     do
-        docker exec -d Cluster${count}_LB ./$compiled_file -t $feedback -q $threshold -k $kappa /bin/bash
+        docker exec -d Cluster${count}_LB compiled/$compiled_file -t $feedback -q $threshold -k $kappa /bin/bash
         docker exec Cluster${count}_LB ps aux # goのプロセスが走っていなかったらやり直しにしたい
     done
 
+    sleep 1
     # 実験データの取得
     # --------------------------
     ## 負荷テスト(apache bench, apache jmeter, curl, wrk, etc...)
 
     # apache jmeterによる負荷テスト
-    sh tools/jmeter.sh $url $time $vus
+    ./../tools/jmeter_multi.sh $url $time $vus
     wait
     echo "All tests completed."
 
-    for num in $(seq 2 $((count + 1)))
+    echo $count
+    for num in $(seq 2 $((count + 2)))
     do 
         i=$((num - 2)) # cluster 5台: i=0:4
         echo "Cluster$i" 
@@ -120,9 +122,9 @@ do
 
     # 計測結果ファイルの移動
     timestamp=$(date +"%Y%m%d_%H%M%S")
-    rm -f ./log/output.csv
-    mv ./log/jmeter.log "${data_dir}/jmeter_${attempt_count}_${timestamp}.log"
-    mv ./log/result_60s.jtl "${data_dir}/jmeter_result${time}s_${attempt_count}_${timestamp}.jtl"
+    rm -f ../log/output.csv
+    mv ../log/jmeter.log "${data_dir}/jmeter_${attempt_count}_${timestamp}.log"
+    mv ../log/result_60s.jtl "${data_dir}/jmeter_result${time}s_${attempt_count}_${timestamp}.jtl"
 
     docker exec -it redis-server redis-cli flushall # rediskeyの初期化
     attempt_count=`expr $attempt_count + 1`
