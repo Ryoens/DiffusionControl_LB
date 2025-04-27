@@ -122,7 +122,7 @@ do
 
     # 計測結果ファイルの移動
     timestamp=$(date +"%Y%m%d_%H%M%S")
-    rm -f ../log/output.csv
+    rm -f ../log/output.csv temp_test.jmx
     mv ../log/jmeter.log "${data_dir}/jmeter_${attempt_count}_${timestamp}.log"
     mv ../log/result_60s.jtl "${data_dir}/jmeter_result${time}s_${attempt_count}_${timestamp}.jtl"
 

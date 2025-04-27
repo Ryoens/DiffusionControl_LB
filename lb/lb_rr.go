@@ -246,8 +246,7 @@ func main(){
 				transport = append(transport, server.Transport)
 			}
 	
-			fmt.Println(totalQueue, queue, responseCount, currentTransport)
-
+			// fmt.Println(totalQueue, queue, responseCount, currentTransport) // for debug
 			time.Sleep(getDataTime * time.Millisecond) // ms
 			// time.Sleep(time.Duration(sleep_time) * time.Second) // s
 		}
