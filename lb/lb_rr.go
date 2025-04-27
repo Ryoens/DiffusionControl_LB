@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"sort"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -28,6 +29,7 @@ type LoadBalancer struct {
 }
 
 type webServer struct {
+	ID int
 	IP string
 	Sessions int
 }
@@ -41,13 +43,20 @@ type Cluster struct {
 type Response struct {
 	TotalQueue []int // 総リクエスト数
 	CurrentQueue []int // セッション数
+	FirstReceivedQueue []int
+	SecondReceivedQueue []int
 	CurrentResponse []int // レスポンス数
 	CurrentTransport []int // 転送数
 	Transport []int
+	Session []int
 }
 
 type splitData struct {
 	Transport []int
+}
+
+type splitWebServer struct {
+	Session []int
 }
 
 var (
@@ -73,15 +82,25 @@ var (
 		DB:   0,
 	})
 
+	transportSet = &http.Transport{
+		MaxIdleConns:        1000,
+		MaxIdleConnsPerHost: 1000,
+		IdleConnTimeout:     90 * time.Second,
+	}
+
 	// 評価用パラメータ
 	queue        int // 処理待ちTCPセッション数
 	totalQueue int // LBに入ってきた全てのリクエスト
 	responseCount    int // レスポンス返却した数をカウント	
 	webResponseCount int // 内部のwebサーバにてレスポンス返却した数
 	currentTransport int // リバースプロキシで隣接LBに転送した数
+	firstReceivedCount int // 隣接LBからダイレクトに受け取ったリクエスト数
+	adjacentQueueCount int // マルチホップしたリクエスト
 
 	totalData []int // 
 	currentQueue []int
+	firstReceivedQueue []int
+	secondReceivedQueue []int
 	currentResponse []int
 	totalTransport []int
 
@@ -89,6 +108,7 @@ var (
 	data []int
 	weight []int
 	transport []int
+	session []int
 
 	final bool
 	threshold int
@@ -168,7 +188,7 @@ func init(){
 
 	fmt.Println(totalLBs, ownClusterLB)
 
-	var id int
+	var id, idWeb int
 	for _, cluster := range clusters {
 		if cluster.Cluster_LB == ownClusterLB {
 			// 自クラスタの Web サーバを抽出
@@ -190,9 +210,27 @@ func init(){
 
 	for _, web := range ownWebServers {
 		webServers = append(webServers, webServer{
+			ID: idWeb,
 			IP: web,
 			Sessions: 0,
 		})
+		idWeb++
+	}
+
+	sort.Slice(clusterLBs, func(i, j int) bool {
+		return getLastOctet(clusterLBs[i].Address) < getLastOctet(clusterLBs[j].Address)
+	})
+	sort.Slice(webServers, func(i, j int) bool {
+		return getLastOctet(webServers[i].IP) < getLastOctet(webServers[j].IP)
+	})
+
+	for i := range clusterLBs {
+		lastOctet := getLastOctet(clusterLBs[i].Address)
+		clusterLBs[i].ID = lastOctet - 2
+	}
+	for i := range webServers {
+		lastOctet := getLastOctet(webServers[i].IP)
+		webServers[i].ID = lastOctet % 10
 	}
 
 	fmt.Println(clusterLBs, ownWebServers, webServers)
@@ -239,11 +277,16 @@ func main(){
 	
 			totalData = append(totalData, totalQueue)
 			currentQueue = append(currentQueue, queue)
+			firstReceivedQueue = append(firstReceivedQueue, firstReceivedCount)
+			secondReceivedQueue = append(secondReceivedQueue, adjacentQueueCount)
 			currentResponse = append(currentResponse, responseCount)
 			totalTransport = append(totalTransport, currentTransport)
 	
 			for _, server := range clusterLBs {
 				transport = append(transport, server.Transport)
+			}
+			for _, backend := range webServers {
+				session = append(session, backend.Sessions)
 			}
 	
 			// fmt.Println(totalQueue, queue, responseCount, currentTransport) // for debug
@@ -260,6 +303,18 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
 	totalQueue++
 	queue++ // 処理待ちセッション数をインクリメント
+
+	originalLB := r.Header.Get("X-Original-LB")
+	if originalLB == "" {
+		// fmt.Println("source: external user")
+	} else if originalLB == "114.51.4.2" {
+		// fmt.Println("source LB address:", originalLB)
+		firstReceivedCount++
+	} else {
+		// fmt.Println("source adjacentLB address:", originalLB)
+		adjacentQueueCount++
+	}
+
 	mutex.Unlock()
 
 	proxyURL := &url.URL{
@@ -273,6 +328,12 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		// Calculate関数で計算した値を該当IPアドレスの重みとして指定
 		randomIndex = RoundRobin_AdjacentLB()
 		proxyURL.Host = randomIndex.IP + tcpPort
+
+		originalDirector := proxy.Director
+		proxy.Director = func(req *http.Request) {
+			originalDirector(req)
+			req.Header.Set("X-Original-LB", ownClusterLB)
+		}
 
 		proxy.ModifyResponse = func(res *http.Response) error {
 			mutex.Lock()
@@ -338,12 +399,21 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 		clusters[clusterIndex].Transport = append(clusters[clusterIndex].Transport, transport[i])
 	}
 
+	backends := make([]splitWebServer, len(webServers))
+	for i := 0; i < len(session); i++ {
+		backendsIndex := i % len(webServers)
+		backends[backendsIndex].Session = append(backends[backendsIndex].Session, session[i])
+	}
+
 	response := Response{
 		TotalQueue: totalData,
 		CurrentQueue: currentQueue,
+		FirstReceivedQueue: firstReceivedQueue,
+		SecondReceivedQueue: secondReceivedQueue,
 		CurrentResponse: currentResponse,
 		CurrentTransport: totalTransport,
 		Transport: transport,
+		Session: session, 
 	}
 
 	// --------
@@ -356,17 +426,16 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 
 	var csvData strings.Builder
 	header := []string{"TotalQueue"}
-	header = append(header, "CurrentQueue")
+	header = append(header, "Queue")
+	header = append(header, "FirstReceivedQueue")
+	header = append(header, "SecondReceivedQueue")
 	header = append(header, "CurrentResponse")
 	header = append(header, "CurrentTransport")
 	for i := 0; i < len(clusterLBs); i++ {
-		header = append(header, fmt.Sprintf("%d_Data", i))
-	}
-	for i := 0; i < len(clusterLBs); i++ {
-		header = append(header, fmt.Sprintf("%d_Weight", i))
-	}
-	for i := 0; i < len(clusterLBs); i++ {
 		header = append(header, fmt.Sprintf("%d_Transport", i))
+	}
+	for i := 0; i < len(webServers); i++ {
+		header = append(header, fmt.Sprintf("%d_Session", webServers[i].ID))
 	}
 	
 	// パラメータが増えた場合はcsv出力としてここで追加する
@@ -377,12 +446,21 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	for i := 0; i < rowCount; i++ {
 		record := []string{fmt.Sprint(response.TotalQueue[i])}
 		record = append(record, strconv.Itoa(response.CurrentQueue[i]))
+		record = append(record, strconv.Itoa(response.FirstReceivedQueue[i]))
+		record = append(record, strconv.Itoa(response.SecondReceivedQueue[i]))
 		record = append(record, strconv.Itoa(response.CurrentResponse[i]))
 		record = append(record, strconv.Itoa(response.CurrentTransport[i]))
 		
 		for j := 0; j < len(clusterLBs); j++ {
 			if i < len(clusters[j].Transport) {
 				record = append(record, strconv.Itoa(clusters[j].Transport[i]))
+			} else {
+				record = append(record, "0") // 値がない場合は0を挿入
+			}
+		}
+		for j := 0; j < len(webServers); j++ {
+			if i < len(backends[j].Session) {
+				record = append(record, strconv.Itoa(backends[j].Session[i]))
 			} else {
 				record = append(record, "0") // 値がない場合は0を挿入
 			}
@@ -416,6 +494,20 @@ func joinWeight(weight []int) string {
 		result.WriteString(strconv.Itoa(w))
 	}
 	return result.String()
+}
+
+func getLastOctet(ip string) int {
+    parts := strings.Split(ip, ".")
+    if len(parts) != 4 {
+        fmt.Println("Invalid IP address format:", ip)
+        return -1
+    }
+    last, err := strconv.Atoi(parts[3])
+    if err != nil {
+        fmt.Println("Invalid IP address:", ip)
+        return -1
+    }
+    return last
 }
 
 func waitForAllLBsAndSyncStart(ctx context.Context, rdb *redis.Client, ownClusterLB string, totalLBs int, isLeader bool, redisKey string) {
