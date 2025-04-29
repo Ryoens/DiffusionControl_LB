@@ -111,7 +111,9 @@ var (
 	session []int
 
 	final bool
+	feedback int
 	threshold int
+	kappa float64
 )
 
 const (
@@ -131,10 +133,14 @@ const (
 
 func init(){
 	// 引数の取得
+	t := flag.Int("t", 0, "feedback information")
 	q := flag.Int("q", 0, "threshold")
+	k := flag.Float64("k", 0.0, "diffusion coefficient")
 
 	flag.Parse()
+	feedback = *t
     threshold = *q
+    kappa = *k
 
     fmt.Printf("threshold -q : %d\n", threshold)
 
@@ -432,7 +438,7 @@ func dataReceiver(w http.ResponseWriter, r *http.Request) {
 	header = append(header, "CurrentResponse")
 	header = append(header, "CurrentTransport")
 	for i := 0; i < len(clusterLBs); i++ {
-		header = append(header, fmt.Sprintf("%d_Transport", i))
+		header = append(header, fmt.Sprintf("%d_Transport", clusterLBs[i].ID))
 	}
 	for i := 0; i < len(webServers); i++ {
 		header = append(header, fmt.Sprintf("%d_Session", webServers[i].ID))

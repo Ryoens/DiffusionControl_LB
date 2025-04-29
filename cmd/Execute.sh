@@ -100,7 +100,19 @@ do
         docker exec Cluster${count}_LB ps aux # goのプロセスが走っていなかったらやり直しにしたい
     done
 
-    sleep 1
+    while true;
+    do
+      key_list=$(docker exec -i redis-server redis-cli --raw keys 'lb_ready:*')
+      key_count=$(echo "$key_list" | grep -c '^lb_ready:')
+      echo $key_count
+
+      if [ "$key_count" -eq $((KEY + 1)) ]; then
+        echo "start"
+        break
+      fi
+      sleep 1
+    done
+
     # 実験データの取得
     # --------------------------
     ## 負荷テスト(apache bench, apache jmeter, curl, wrk, etc...)

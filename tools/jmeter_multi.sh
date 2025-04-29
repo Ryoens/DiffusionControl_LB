@@ -49,6 +49,7 @@ for target in "${all_targets[@]}"; do
     else
         # 他のLBは10〜20の乱数
         threads=$((RANDOM % 11 + 10))
+        echo $threads
         # threads=1
     fi
 
