@@ -6,7 +6,7 @@ import numpy as np
 from collections import defaultdict
 
 def find_csv_files(directory, cluster_num):
-    pattern = re.compile(rf"Cluster{cluster_num}_(\d{{8}}_\d{{6}})\.csv")
+    pattern = re.compile(rf"Cluster{cluster_num}_(\d{{1}}_\d{{8}}_\d{{6}})\.csv")
     cluster_files = []
     
     try:
@@ -26,6 +26,18 @@ def remove_empty_rows_per_file(csv_file):
     df_numeric = df.apply(pd.to_numeric, errors='coerce')
     df_cleaned = df.loc[~(df.iloc[:, 1:].eq(0).all(axis=1))]
     df_cleaned.reset_index(drop=True, inplace=True)
+
+    # -------------------
+    drop_index = None
+    for i in range(1, len(df_cleaned)):
+        if df_cleaned.iloc[i].equals(df_cleaned.iloc[i - 1]):
+            drop_index = i
+            break
+
+    if drop_index is not None:
+        df_cleaned = df_cleaned.iloc[:drop_index]
+        print(f"2行連続で同じ数値を検出。{drop_index}行目以降を削除しました。")
+    # -------------------
     
     directory, base_name = os.path.split(csv_file)
     output_file = os.path.join(directory, f"cleaned_{base_name}")
@@ -35,7 +47,7 @@ def remove_empty_rows_per_file(csv_file):
     return output_file
 
 def process_all_clusters(input_dir, median_output_file):
-    selected_columns = ["TotalQueue", "CurrentQueue", "CurrentResponse"]
+    selected_columns = ["TotalQueue", "Queue", "CurrentResponse"]
     
     all_data = {cluster: [] for cluster in range(5)}
     for cluster_num in range(5):  # Cluster0 から Cluster4 まで
@@ -53,26 +65,42 @@ def process_all_clusters(input_dir, median_output_file):
                 padding = pd.DataFrame(np.nan, index=range(max_length - len(all_data[cluster_num][i])), columns=selected_columns)
                 all_data[cluster_num][i] = pd.concat([all_data[cluster_num][i], padding], ignore_index=True)
     
+    max_length = max(
+        max(len(df) for df in cluster_data) if cluster_data else 0
+        for cluster_data in all_data.values()
+    )
+    for cluster_num in range(5):
+        for i in range(len(all_data[cluster_num])):
+            df = all_data[cluster_num][i][selected_columns]
+            if len(df) < max_length:
+                padding = pd.DataFrame(np.nan, index=range(max_length - len(df)), columns=selected_columns)
+                all_data[cluster_num][i] = pd.concat([df, padding], ignore_index=True)
+            else:
+                all_data[cluster_num][i] = df
+
     median_results = []
     for row in range(max_length):
         median_row = []
         for cluster_num in range(5):
             if all_data[cluster_num]:
-                stacked_data = np.stack([df.iloc[row].to_numpy() for df in all_data[cluster_num] if row < len(df)])
+                stacked_data = np.stack([
+                    df.iloc[row].to_numpy()
+                    for df in all_data[cluster_num]
+                    if row < len(df)
+                ])
                 if stacked_data.size > 0:
-                    median_row.extend(np.nanmedian(stacked_data, axis=0))
+                    median_row.extend(np.round(np.nanmean(stacked_data, axis=0)).astype(int))
                 else:
-                    median_row.extend([np.nan] * 3)
+                    median_row.extend([np.nan] * len(selected_columns))
             else:
-                median_row.extend([np.nan] * 3)
+                median_row.extend([np.nan] * len(selected_columns))
         median_results.append(median_row)
     
-    columns = [
-        "Cluster0_TotalQueue_Median", "Cluster1_TotalQueue_Median", "Cluster2_TotalQueue_Median", "Cluster3_TotalQueue_Median", "Cluster4_TotalQueue_Median", 
-        "Cluster0_CurrentQueue_Median", "Cluster1_CurrentQueue_Median", "Cluster2_CurrentQueue_Median", "Cluster3_CurrentQueue_Median", "Cluster4_CurrentQueue_Median", 
-        "Cluster0_CurrentResponse_Median", "Cluster1_CurrentResponse_Median", "Cluster2_CurrentResponse_Median", "Cluster3_CurrentResponse_Median", "Cluster4_CurrentResponse_Median"
-    ]
-    
+    columns = []
+    for cluster_num in range(5):
+        for col in selected_columns:
+            columns.append(f"Cluster{cluster_num}_{col}")
+
     median_df = pd.DataFrame(median_results, columns=columns)
     median_df.to_csv(median_output_file, index=False)
     

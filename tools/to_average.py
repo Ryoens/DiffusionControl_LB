@@ -6,7 +6,7 @@ import numpy as np
 from collections import defaultdict
 
 def find_csv_files(directory, cluster_num):
-    pattern = re.compile(rf"Cluster{cluster_num}_(\d{{8}}_\d{{6}})\.csv")
+    pattern = re.compile(rf"Cluster{cluster_num}_(\d{{1}}_\d{{8}}_\d{{6}})\.csv")
     cluster_files = []
     
     try:
@@ -26,7 +26,19 @@ def remove_empty_rows_per_file(csv_file):
     df_numeric = df.apply(pd.to_numeric, errors='coerce')
     df_cleaned = df.loc[~(df.iloc[:, 1:].eq(0).all(axis=1))]
     df_cleaned.reset_index(drop=True, inplace=True)
-    
+
+    # -------------------
+    drop_index = None
+    for i in range(1, len(df_cleaned)):
+        if df_cleaned.iloc[i].equals(df_cleaned.iloc[i - 1]):
+            drop_index = i
+            break
+
+    if drop_index is not None:
+        df_cleaned = df_cleaned.iloc[:drop_index]
+        print(f"2行連続で同じ数値を検出。{drop_index}行目以降を削除しました。")
+    # -------------------
+
     directory, base_name = os.path.split(csv_file)
     output_file = os.path.join(directory, f"cleaned_{base_name}")
     df_cleaned.to_csv(output_file, index=False)
@@ -35,7 +47,7 @@ def remove_empty_rows_per_file(csv_file):
     return output_file
 
 def process_all_clusters(input_dir, avg_output_file):
-    selected_columns = ["TotalQueue", "CurrentQueue", "CurrentResponse"]
+    selected_columns = ["TotalQueue", "Queue", "CurrentResponse"]
     
     all_data = {cluster: [] for cluster in range(5)}
     for cluster_num in range(5):  # Cluster0 から Cluster4 まで
@@ -45,34 +57,45 @@ def process_all_clusters(input_dir, avg_output_file):
             df = pd.read_csv(cleaned_file)
             if all(col in df.columns for col in selected_columns):
                 all_data[cluster_num].append(df[selected_columns])
-    
-    max_length = max(max(len(df) for df in cluster_data) if cluster_data else 0 for cluster_data in all_data.values())
+                
+    max_length = max(
+        max(len(df) for df in cluster_data) if cluster_data else 0
+        for cluster_data in all_data.values()
+    )
     for cluster_num in range(5):
         for i in range(len(all_data[cluster_num])):
-            if len(all_data[cluster_num][i]) < max_length:
-                padding = pd.DataFrame(np.nan, index=range(max_length - len(all_data[cluster_num][i])), columns=selected_columns)
-                all_data[cluster_num][i] = pd.concat([all_data[cluster_num][i], padding], ignore_index=True)
-    
+            df = all_data[cluster_num][i][selected_columns]
+            if len(df) < max_length:
+                padding = pd.DataFrame(np.nan, index=range(max_length - len(df)), columns=selected_columns)
+                all_data[cluster_num][i] = pd.concat([df, padding], ignore_index=True)
+            else:
+                all_data[cluster_num][i] = df
+
     avg_results = []
     for row in range(max_length):
         avg_row = []
         for cluster_num in range(5):
             if all_data[cluster_num]:
-                stacked_data = np.stack([df.iloc[row].to_numpy() for df in all_data[cluster_num] if row < len(df)])
+                # 各ファイルの指定行をスタック
+                stacked_data = np.stack([
+                    df.iloc[row].to_numpy()
+                    for df in all_data[cluster_num]
+                    if row < len(df)
+                ])
                 if stacked_data.size > 0:
-                    avg_row.extend(np.nanmean(stacked_data, axis=0))
+                    avg_row.extend(np.round(np.nanmean(stacked_data, axis=0)).astype(int))  # 四捨五入して整数
                 else:
-                    avg_row.extend([np.nan] * 3)
+                    avg_row.extend([np.nan] * len(selected_columns))
             else:
-                avg_row.extend([np.nan] * 3)
+                avg_row.extend([np.nan] * len(selected_columns))
         avg_results.append(avg_row)
-    
-    columns = [
-        "Cluster0_TotalQueue_Average", "Cluster1_TotalQueue_Average", "Cluster2_TotalQueue_Average", "Cluster3_TotalQueue_Average", "Cluster4_TotalQueue_Average", 
-        "Cluster0_CurrentQueue_Average", "Cluster1_CurrentQueue_Average", "Cluster2_CurrentQueue_Average", "Cluster3_CurrentQueue_Average", "Cluster4_CurrentQueue_Average", 
-        "Cluster0_CurrentResponse_Average", "Cluster1_CurrentResponse_Average", "Cluster2_CurrentResponse_Average", "Cluster3_CurrentResponse_Average", "Cluster4_CurrentResponse_Average"
-    ]
-    
+
+    columns = []
+    for cluster_num in range(5):
+        for col in selected_columns:
+            columns.append(f"Cluster{cluster_num}_{col}")
+            
+    # 平均値の DataFrame を保存
     avg_df = pd.DataFrame(avg_results, columns=columns)
     avg_df.to_csv(avg_output_file, index=False)
     
