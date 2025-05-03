@@ -47,10 +47,17 @@ for target in "${all_targets[@]}"; do
         # フラッシュクラウド対象LB
         threads=$MAIN_THREADS
     else
-        # 他のLBは10〜20の乱数
-        threads=$((RANDOM % 11 + 10))
+        # その他LB
+        if [ "$MAIN_THREADS" -eq 10 ]; then
+          threads=1
+        else 
+          min=$(( MAIN_THREADS / 10 ))
+          max=$(( MAIN_THREADS / 5 ))
+
+          threads=$((RANDOM % (max - min + 1) + min ))
+        fi
+
         echo $threads
-        # threads=1
     fi
 
 cat <<EOF >> temp_test.jmx

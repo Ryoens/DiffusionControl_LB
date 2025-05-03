@@ -89,7 +89,8 @@ def process_all_clusters(input_dir, median_output_file):
                     if row < len(df)
                 ])
                 if stacked_data.size > 0:
-                    median_row.extend(np.round(np.nanmean(stacked_data, axis=0)).astype(int))
+                    # median_row.extend(np.round(np.nanmean(stacked_data, axis=0)).astype(int))
+                    median_row.extend(np.round(np.nanmedian(stacked_data, axis=0)).astype(int))
                 else:
                     median_row.extend([np.nan] * len(selected_columns))
             else:
