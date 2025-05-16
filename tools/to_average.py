@@ -3,7 +3,10 @@ import re
 import argparse
 import pandas as pd
 import numpy as np
+import warnings
 from collections import defaultdict
+
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 def find_csv_files(directory, cluster_num):
     pattern = re.compile(rf"Cluster{cluster_num}_(\d{{1}}_\d{{8}}_\d{{6}})\.csv")
@@ -36,13 +39,13 @@ def remove_empty_rows_per_file(csv_file):
 
     if drop_index is not None:
         df_cleaned = df_cleaned.iloc[:drop_index]
-        print(f"2行連続で同じ数値を検出。{drop_index}行目以降を削除しました。")
+        # print(f"2行連続で同じ数値を検出。{drop_index}行目以降を削除しました。")
     # -------------------
 
     directory, base_name = os.path.split(csv_file)
     output_file = os.path.join(directory, f"cleaned_{base_name}")
     df_cleaned.to_csv(output_file, index=False)
-    print(f"{output_file} を作成しました！（行数: {len(df_cleaned)}）")
+    # print(f"{output_file} を作成しました！（行数: {len(df_cleaned)}）")
     
     return output_file
 
@@ -83,7 +86,10 @@ def process_all_clusters(input_dir, avg_output_file):
                     if row < len(df)
                 ])
                 if stacked_data.size > 0:
-                    avg_row.extend(np.round(np.nanmean(stacked_data, axis=0)).astype(int))  # 四捨五入して整数
+                    try:
+                        avg_row.extend(np.round(np.nanmean(stacked_data, axis=0)).astype(int))  # 四捨五入して整数
+                    except RuntimeWarning:
+                        avg_row.extend([np.nan] * len(selected_columns))    
                 else:
                     avg_row.extend([np.nan] * len(selected_columns))
             else:

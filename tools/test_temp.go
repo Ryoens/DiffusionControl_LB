@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	// "github.com/redis/go-redis/v9"
 )
 
 type LoadBalancer struct {
@@ -60,7 +60,7 @@ var (
 	mutex sync.RWMutex
 
 	ctx        = context.Background()
-	redisClient *redis.Client
+	// redisClient *redis.Client
 	totalLBs int
 	backendIndex int // RR方式におけるインデックス
 	adjacentIndex int
@@ -68,10 +68,10 @@ var (
 	isLeader bool
 	flushOnStartup = false
 
-	rdb = redis.NewClient(&redis.Options{
-		Addr: "114.51.4.7:6379",
-		DB:   0,
-	})
+	// rdb = redis.NewClient(&redis.Options{
+	// 	Addr: "114.51.4.7:6379",
+	// 	DB:   0,
+	// })
 
 	// 評価用パラメータ
 	queue        int // 処理待ちTCPセッション数
@@ -196,6 +196,12 @@ func init(){
 	}
 
 	fmt.Println(clusterLBs, ownWebServers, webServers)
+	
+	// 自身のLB IPアドレスが114.51.4.6の場合, 
+	if ownClusterLB == "114.51.4.6" {
+		webServers = webServers[:len(webServers)-1]
+	}
+	fmt.Println(webServers)
 	isLeader = ownClusterLB == leaderLB // リーダーLBだけ true にする
 	waitForAllLBsAndSyncStart(ctx, rdb, ownClusterLB, totalLBs, isLeader, "lb_ready:")
 }
