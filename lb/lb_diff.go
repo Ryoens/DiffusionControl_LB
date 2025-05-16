@@ -267,6 +267,13 @@ func init(){
 	}
 
 	fmt.Println(clusterLBs, ownWebServers, webServers)
+
+	// // 特定クラスタのwebサーバを減らす場合
+	// // 自身のLB IPアドレスが114.51.4.6の場合, weサーバの数を減らす
+	// if ownClusterLB == "114.51.4.6" {
+	// 	webServers = webServers[:len(webServers)-2]
+	// }
+
 	isLeader = ownClusterLB == leaderLB // リーダーLBだけ true にする
 	waitForAllLBsAndSyncStart(ctx, rdb, ownClusterLB, totalLBs, isLeader, "lb_ready:")
 }
