@@ -40,7 +40,7 @@ else
 fi
 
 echo ${cls[@]} ${web[@]}
-exit 1
+# exit 1
 
 # クラスタ数をコンテナ数から取得
 container=$(docker ps --filter "name=_LB" --format "{{.Names}}" | head -n 1)
@@ -117,7 +117,8 @@ do
 
     for count in $(seq 0 "$KEY");
     do
-        docker exec -d Cluster${count}_LB compiled/$compiled_file -t $feedback -q $threshold -k $kappa /bin/bash
+        # docker exec -d Cluster${count}_LB compiled/$compiled_file -t $feedback -q $threshold -k $kappa /bin/bash
+        docker exec -d Cluster${count}_LB compiled/$compiled_file -t $feedback -q $threshold -k $kappa ${cls[@]} ${web[@]} /bin/bash
         docker exec Cluster${count}_LB ps aux # goのプロセスが走っていなかったらやり直しにしたい
     done
 

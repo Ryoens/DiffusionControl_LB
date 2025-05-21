@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"sort"
 
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
@@ -40,6 +41,7 @@ type LoadBalancer struct {
 }
 
 type webServer struct {
+	ID int
 	IP     string
 	Weight int
 	Sessions int // 各webサーバのセッション数
@@ -145,12 +147,19 @@ func init(){
     threshold = *q
     kappa = *k
 
+	args := flag.Args()
+	if len(args)%2 != 0 {
+		fmt.Println("Error: Remaining arguments must be even (half clusters, half web servers).")
+		os.Exit(1)
+	}
+
 	fmt.Printf("feedback -t : %d\n", feedback)
     fmt.Printf("threshold -q : %d\n", threshold)
     fmt.Printf("kappa -k : %.2f\n", kappa)
+	fmt.Println("remain: ", args)
 
 	// open json file 
-	file, err := os.Open("./json/config.json")
+	file, err := os.Open("../json/config.json")
 	if err != nil {
 		log.Fatalf("Failed to open file: %v", err)
 	}
@@ -197,10 +206,9 @@ func init(){
 	// take own Cluster_LB IP address
 	ownClusterLB = ip_addresses[1]
 
-	// fmt.Println(totalLBs, ownClusterLB, clusters)
 	fmt.Println(totalLBs, ownClusterLB)
 
-	var id int
+	var id, idWeb int
 	for _, cluster := range clusters {
 		if cluster.Cluster_LB == ownClusterLB {
 			// 自クラスタの Web サーバを抽出
@@ -209,10 +217,8 @@ func init(){
 					ownWebServers = append(ownWebServers, ip)
 				}
 			}
-			// fmt.Printf("自クラスタ (%s): Webサーバ: %v\n", name, ownWebServers)
 		} else {
 			// 他クラスタの LB を clusterLBs に追加
-			// fmt.Printf("%v(%T) %v(%T)\n", name, name, cluster, cluster)
 			clusterLBs = append(clusterLBs, LoadBalancer{
 				ID:        id,
 				Address:   cluster.Cluster_LB,
@@ -227,13 +233,63 @@ func init(){
 
 	for _, web := range ownWebServers {
 		webServers = append(webServers, webServer{
+			ID: idWeb,
 			IP: web,
 			Weight: 0,
 			Sessions: 0,
 		})
+		idWeb++
 	}
 
+	sort.Slice(clusterLBs, func(i, j int) bool {
+		return getLastOctet(clusterLBs[i].Address) < getLastOctet(clusterLBs[j].Address)
+	})
+	sort.Slice(webServers, func(i, j int) bool {
+		return getLastOctet(webServers[i].IP) < getLastOctet(webServers[j].IP)
+	})
+
+	for i := range clusterLBs {
+		lastOctet := getLastOctet(clusterLBs[i].Address)
+		clusterLBs[i].ID = lastOctet - 2
+	}
+	for i := range webServers {
+		lastOctet := getLastOctet(webServers[i].IP)
+		webServers[i].ID = lastOctet % 10
+	}
 	fmt.Println(clusterLBs, ownWebServers, webServers)
+
+	// ここに受け取ったargsからcluster, webで分離してwebサーバ数を減らす
+	half := len(args) / 2
+	clusterArgs := args[:half]
+	webArgs := args[half:]
+
+	fmt.Println(half, clusterArgs, webArgs)
+
+	for i, cls := range clusterArgs {
+		fmt.Println(i, cls, webArgs[i])
+
+		// 自身のIPアドレスがwebサーバを減らすべき対象のクラスタと一致する場合
+		if (getLastOctet(ownClusterLB) - 2) == i  {
+			num, err := strconv.Atoi(webArgs[i])
+			if err != nil {
+				fmt.Println("Error: invalid webArgs value", webArgs[i])
+				continue
+			}
+			webNum := len(webServers) - num
+			fmt.Println("webnum: ", webNum)
+			webServers = webServers[:len(webServers)-webNum]
+		}
+	}
+
+	fmt.Println(webServers)
+
+	// // 特定クラスタのwebサーバを減らす場合
+	// // 自身のLB IPアドレスが114.51.4.6の場合, weサーバの数を減らす
+	// if ownClusterLB == "114.51.4.6" {
+	// 	webServers = webServers[:len(webServers)-2]
+	// }
+
+	// os.Exit(0)
 	isLeader = ownClusterLB == leaderLB // リーダーLBだけ true にする
 	waitForAllLBsAndSyncStart(ctx, rdb, ownClusterLB, totalLBs, isLeader, "lb_ready:")
 }
@@ -685,6 +741,20 @@ func joinWeight(weight []int) string {
 		result.WriteString(strconv.Itoa(w))
 	}
 	return result.String()
+}
+
+func getLastOctet(ip string) int {
+    parts := strings.Split(ip, ".")
+    if len(parts) != 4 {
+        fmt.Println("Invalid IP address format:", ip)
+        return -1
+    }
+    last, err := strconv.Atoi(parts[3])
+    if err != nil {
+        fmt.Println("Invalid IP address:", ip)
+        return -1
+    }
+    return last
 }
 
 func waitForAllLBsAndSyncStart(ctx context.Context, rdb *redis.Client, ownClusterLB string, totalLBs int, isLeader bool, redisKey string) {

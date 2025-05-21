@@ -142,7 +142,14 @@ func init(){
     threshold = *q
     kappa = *k
 
+	args := flag.Args()
+	if len(args)%2 != 0 {
+		fmt.Println("Error: Remaining arguments must be even (half clusters, half web servers).")
+		os.Exit(1)
+	}
+
     fmt.Printf("threshold -q : %d\n", threshold)
+	fmt.Println("remain: ", args)
 
 	// open json file 
 	file, err := os.Open("./json/config.json")
@@ -241,11 +248,30 @@ func init(){
 
 	fmt.Println(clusterLBs, ownWebServers, webServers)
 
-	// // 特定クラスタのwebサーバを減らす場合
-	// // 自身のLB IPアドレスが114.51.4.6の場合, weサーバの数を減らす
-	// if ownClusterLB == "114.51.4.6" {
-	// 	webServers = webServers[:len(webServers)-2]
-	// }
+	// ここに受け取ったargsからcluster, webで分離してwebサーバ数を減らす
+	half := len(args) / 2
+	clusterArgs := args[:half]
+	webArgs := args[half:]
+
+	fmt.Println(half, clusterArgs, webArgs)
+
+	for i, cls := range clusterArgs {
+		fmt.Println(i, cls, webArgs[i])
+
+		// 自身のIPアドレスがwebサーバを減らすべき対象のクラスタと一致する場合
+		if (getLastOctet(ownClusterLB) - 2) == i  {
+			num, err := strconv.Atoi(webArgs[i])
+			if err != nil {
+				fmt.Println("Error: invalid webArgs value", webArgs[i])
+				continue
+			}
+			webNum := len(webServers) - num
+			fmt.Println("webnum: ", webNum)
+			webServers = webServers[:len(webServers)-webNum]
+		}
+	}
+
+	fmt.Println(webServers)
 
 	isLeader = ownClusterLB == leaderLB // リーダーLBだけ true にする
 	waitForAllLBsAndSyncStart(ctx, rdb, ownClusterLB, totalLBs, isLeader, "lb_ready:")
