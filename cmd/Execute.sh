@@ -21,6 +21,27 @@ echo $vus $attempt
 
 echo "-------- request OK --------"
 
+# webサーバ数の指定
+read -p "Number of Clusters to reduce Web Servers: " num_cluster
+
+if [[ $num_cluster -eq 0 ]]; then
+  echo "default start"
+elif [[ $num_cluster -eq 1 ]]; then
+  read -p "Set number [Cluster] [WebServers]: " cls web
+else
+  cls=()
+  web=()
+  for num_cls in $(seq 0 $((num_cluster - 1)) )
+  do
+    read -p "Set number [Cluster] [WebServers]: " temp_cls temp_web
+    cls+=($temp_cls)
+    web+=($temp_web)
+  done
+fi
+
+echo ${cls[@]} ${web[@]}
+exit 1
+
 # クラスタ数をコンテナ数から取得
 container=$(docker ps --filter "name=_LB" --format "{{.Names}}" | head -n 1)
 KEY=${container:7:1}
