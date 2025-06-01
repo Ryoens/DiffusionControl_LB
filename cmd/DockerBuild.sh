@@ -7,10 +7,16 @@ function json_output () {
   	echo $IP_Addresses
 
   	IP_Array=($IP_Addresses)
+	if [[ ${IP_Array[1]} == 172.* ]]; then
+        cluster_ip=${IP_Array[1]}
+    else
+        cluster_ip=${IP_Array[0]}  
+    fi
+	echo $cluster_ip
 
   	cat <<EOF >> $JSON_FILE
   	"cluster$KEY": {
-    	"cluster_lb": "${IP_Array[1]}",
+    	"cluster_lb": "$cluster_ip",
     	"web0": "10.0.$((KEY+1)).10",
     	"web1": "10.0.$((KEY+1)).11",
     	"web2": "10.0.$((KEY+1)).12"
@@ -37,7 +43,7 @@ else
 fi
 
 docker network rm gushing-ecstasy
-docker network create gushing-ecstasy --driver=bridge --subnet=114.51.4.0/24
+docker network create gushing-ecstasy --driver=bridge --subnet=172.18.4.0/24
 
 protoc --version
 echo $QTY_CLUSTER
