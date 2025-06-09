@@ -24,7 +24,7 @@ function json_output () {
     echo "    \"web$j\": \"10.0.$((KEY+1)).$((10 + j))\"$comma" >> $JSON_FILE
   done
 
-  if [ "$KEY" -lt $((QTY_CLUSTER - 1)) ]; then
+  if [ "$KEY" -lt $QTY_CLUSTER ]; then
     echo "  }," >> $JSON_FILE
   else
     echo "  }" >> $JSON_FILE
