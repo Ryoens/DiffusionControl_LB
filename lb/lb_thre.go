@@ -98,7 +98,7 @@ var (
 	flushOnStartup = false
 
 	rdb = redis.NewClient(&redis.Options{
-		Addr: "114.51.4.7:6379",
+		Addr: "10.0.255.2:6379",
 		DB:   0,
 	})
 
@@ -144,9 +144,9 @@ const (
 	sleepTime time.Duration = 1
 	getDataTime time.Duration = 100
 
-	redisHost  = "114.51.4.7:6379"
+	redisHost  = "10.0.255.2:6379"
 	redisKey   = "ready:"
-	leaderLB   = "114.51.4.2"
+	leaderLB   = "172.18.4.2"
 	syncChan   = "sync_start"
 	logFile = "./log/output.csv"
 )
@@ -162,9 +162,16 @@ func init(){
     threshold = *q
     kappa = *k
 
+	args := flag.Args()
+	if len(args)%2 != 0 {
+		fmt.Println("Error: Remaining arguments must be even (half clusters, half web servers).")
+		os.Exit(1)
+	}
+
 	fmt.Printf("feedback -t : %d\n", feedback)
     fmt.Printf("threshold -q : %d\n", threshold)
     fmt.Printf("kappa -k : %.2f\n", kappa)
+	fmt.Println("remain: ", args)
 
 	// open json file 
 	file, err := os.Open("./json/config.json")
@@ -212,9 +219,13 @@ func init(){
 	// split output results by spaces and assign to array
 	ip_addresses := strings.Fields(string(output))
 	// take own Cluster_LB IP address
-	ownClusterLB = ip_addresses[1]
+	if strings.HasPrefix(ip_addresses[1], "172.") {
+		ownClusterLB = ip_addresses[1]
+	} else {
+		ownClusterLB = ip_addresses[0]
+	}
 
-	fmt.Println(totalLBs, ownClusterLB)
+	fmt.Println(totalLBs, ownClusterLB, ip_addresses)
 
 	var id, idWeb int
 	for _, cluster := range clusters {
@@ -266,6 +277,32 @@ func init(){
 	}
 
 	fmt.Println(clusterLBs, ownWebServers, webServers)
+
+	// ここに受け取ったargsからcluster, webで分離してwebサーバ数を減らす
+	half := len(args) / 2
+	clusterArgs := args[:half]
+	webArgs := args[half:]
+
+	fmt.Println(half, clusterArgs, webArgs)
+
+	for i, cls := range clusterArgs {
+		fmt.Println(i, cls, webArgs[i])
+
+		// 自身のIPアドレスがwebサーバを減らすべき対象のクラスタと一致する場合
+		if (getLastOctet(ownClusterLB) - 2) == i  {
+			num, err := strconv.Atoi(webArgs[i])
+			if err != nil {
+				fmt.Println("Error: invalid webArgs value", webArgs[i])
+				continue
+			}
+			webNum := len(webServers) - num
+			fmt.Println("webnum: ", webNum)
+			webServers = webServers[:len(webServers)-webNum]
+		}
+	}
+
+	fmt.Println(webServers)
+
 	isLeader = ownClusterLB == leaderLB // リーダーLBだけ true にする
 	waitForAllLBsAndSyncStart(ctx, rdb, ownClusterLB, totalLBs, isLeader, "lb_ready:")
 }

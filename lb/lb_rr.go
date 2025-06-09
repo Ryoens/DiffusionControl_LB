@@ -78,7 +78,7 @@ var (
 	flushOnStartup = false
 
 	rdb = redis.NewClient(&redis.Options{
-		Addr: "114.51.4.7:6379",
+		Addr: "10.0.255.2:6379",
 		DB:   0,
 	})
 
@@ -123,12 +123,11 @@ const (
 	sleepTime time.Duration = 1
 	getDataTime time.Duration = 100
 
-	logFile = "./log/output.csv"
-
-	redisHost  = "114.51.4.7:6379"
+	redisHost  = "10.0.255.2:6379"
 	redisKey   = "ready:"
-	leaderLB   = "114.51.4.2"
+	leaderLB   = "172.18.4.2"
 	syncChan   = "sync_start"
+	logFile = "./log/output.csv"
 )
 
 func init(){
@@ -197,9 +196,13 @@ func init(){
 	// split output results by spaces and assign to array
 	ip_addresses := strings.Fields(string(output))
 	// take own Cluster_LB IP address
-	ownClusterLB = ip_addresses[1]
+	if strings.HasPrefix(ip_addresses[1], "172.") {
+		ownClusterLB = ip_addresses[1]
+	} else {
+		ownClusterLB = ip_addresses[0]
+	}
 
-	fmt.Println(totalLBs, ownClusterLB)
+	fmt.Println(totalLBs, ownClusterLB, ip_addresses)
 
 	var id, idWeb int
 	for _, cluster := range clusters {
