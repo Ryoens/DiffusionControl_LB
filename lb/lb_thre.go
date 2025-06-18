@@ -47,9 +47,9 @@ type webServer struct {
 	Sessions int // 各webサーバのセッション数
 }
 
-type Cluster struct {
-	Cluster_LB string `json:"Cluster_LB"`
-	Webs map[string]string
+type ClusterJSON struct {
+	AdjacentList map[string]string `json:"adjacentList"`
+	InternalList map[string]string `json:"internalList"`
 }
 
 type Server struct {
@@ -174,7 +174,7 @@ func init(){
 	fmt.Println("remain: ", args)
 
 	// open json file 
-	file, err := os.Open("./json/config.json")
+	file, err := os.Open("./json/adjacentList.json")
 	if err != nil {
 		log.Fatalf("Failed to open file: %v", err)
 	}
@@ -186,75 +186,60 @@ func init(){
 		log.Fatalf("Failed to read file: %v", err)
 	}
 
-	var raw map[string]map[string]string
-	if err := json.Unmarshal(value, &raw); err != nil {
-		log.Fatalf("Failed to unmarshal JSON: %v", err)
+	clusters := make(map[string]ClusterJSON)
+	err = json.Unmarshal(value, &clusters)
+	if err != nil {
+		log.Fatal(err)
 	}
-
-	clusters := make(map[string]Cluster)
-	for name, values := range raw {
-		cluster := Cluster{
-			Webs: make(map[string]string),
-		}
-		for k, v := range values {
-			if k == "cluster_lb" {
-				cluster.Cluster_LB = v
-			} else if strings.HasPrefix(k, "web") {
-				cluster.Webs[k] = v
-			}
-		}
-		clusters[name] = cluster
-	}
-
 	totalLBs = len(clusters)
 
 	// execute "hostname -i"
 	cmd := exec.Command("hostname", "-i")
 	output, err := cmd.Output()
 	if err != nil {
-		fmt.Printf("Error executing command: %v\n", err)
-		return
+		panic(err)
 	}
 
 	// split output results by spaces and assign to array
-	ip_addresses := strings.Fields(string(output))
+	ipAddresses := strings.Fields(string(output))
 	// take own Cluster_LB IP address
-	if strings.HasPrefix(ip_addresses[1], "172.") {
-		ownClusterLB = ip_addresses[1]
+	if strings.HasPrefix(ipAddresses[0], "172.") {
+		ownClusterLB = ipAddresses[0]
 	} else {
-		ownClusterLB = ip_addresses[0]
+		ownClusterLB = ipAddresses[1]
 	}
-
-	fmt.Println(totalLBs, ownClusterLB, ip_addresses)
 
 	var id, idWeb int
 	for _, cluster := range clusters {
-		if cluster.Cluster_LB == ownClusterLB {
-			// 自クラスタの Web サーバを抽出
-			for key, ip := range cluster.Webs {
-				if strings.HasPrefix(key, "web") {
-					ownWebServers = append(ownWebServers, ip)
+		clusterLBIP := cluster.InternalList["cluster_lb"]
+		if clusterLBIP == ownClusterLB {
+			for _, v := range cluster.AdjacentList {
+				// 隣接リストの登録
+				clusterLBs = append(clusterLBs, LoadBalancer{
+					ID:        id,
+					Address:   v,
+					IsHealthy: true,
+					Data:      0,
+					Weight:    0,
+					Transport: 0,
+				})
+				id++
+			}
+			// 自クラスタの Web サーバ登録
+			for k, v := range cluster.InternalList {
+				if strings.HasPrefix(k, "web") {
+					ownWebServers = append(ownWebServers, v)
 				}
 			}
-		} else {
-			// 他クラスタの LB を clusterLBs に追加
-			clusterLBs = append(clusterLBs, LoadBalancer{
-				ID:        id,
-				Address:   cluster.Cluster_LB,
-				IsHealthy: true,
-				Data:      0,
-				Weight:    0,
-				Transport: 0,
-			})
-			id++
 		}
 	}
 
-	for _, web := range ownWebServers {
+	// 自クラスタWebサーバ構造体へ追加
+	for _, ip := range ownWebServers {
 		webServers = append(webServers, webServer{
-			ID: idWeb,
-			IP: web,
-			Weight: 0,
+			ID:       idWeb,
+			IP:       ip,
+			Weight:   0,
 			Sessions: 0,
 		})
 		idWeb++
@@ -268,8 +253,8 @@ func init(){
 	})
 
 	for i := range clusterLBs {
-		lastOctet := getLastOctet(clusterLBs[i].Address)
-		clusterLBs[i].ID = lastOctet - 2
+		getLastOctet(clusterLBs[i].Address)
+		clusterLBs[i].ID = i
 	}
 	for i := range webServers {
 		lastOctet := getLastOctet(webServers[i].IP)

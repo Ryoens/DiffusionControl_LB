@@ -18,7 +18,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	// "strconv"
+	"strconv"
+	"sort"
 	"sync"
 	"time"
 
@@ -39,6 +40,7 @@ type LoadBalancer struct {
 }
 
 type webServer struct {
+	ID     int
 	IP     string
 	Weight int
 	Sessions int // 各webサーバのセッション数
@@ -47,6 +49,11 @@ type webServer struct {
 type Cluster struct {
 	Cluster_LB string `json:"Cluster_LB"`
 	Webs map[string]string
+}
+
+type ClusterJSON struct {
+	AdjacentList map[string]string `json:"adjacentList"`
+	InternalList map[string]string `json:"internalList"`
 }
 
 type Server struct {
@@ -72,7 +79,7 @@ var (
 	flushOnStartup = false
 
 	rdb = redis.NewClient(&redis.Options{
-		Addr: "114.51.4.7:6379",
+		Addr: "10.0.255.2:6379",
 		DB:   0,
 	})
 )	
@@ -82,15 +89,15 @@ const (
 	sleepTime int     = 1
 	kappa float64 = 0.2
 
-	redisHost  = "114.51.4.7:6379"
+	redisHost  = "10.0.255.2:6379"
 	redisKey   = "ready:"
-	leaderLB   = "114.51.4.2"
+	leaderLB   = "172.18.4.2"
 	syncChan   = "sync_start"
 )
 
 func init(){
 	// open json file 
-	file, err := os.Open("./json/config.json")
+	file, err := os.Open("./json/adjacentList.json")
 	if err != nil {
 		log.Fatalf("Failed to open file: %v", err)
 	}
@@ -102,75 +109,92 @@ func init(){
 		log.Fatalf("Failed to read file: %v", err)
 	}
 
-	var raw map[string]map[string]string
-	if err := json.Unmarshal(value, &raw); err != nil {
-		log.Fatalf("Failed to unmarshal JSON: %v", err)
+	clusters := make(map[string]ClusterJSON)
+	err = json.Unmarshal(value, &clusters)
+	if err != nil {
+		log.Fatal(err)
 	}
-
-	clusters := make(map[string]Cluster)
-	for name, values := range raw {
-		cluster := Cluster{
-			Webs: make(map[string]string),
-		}
-		for k, v := range values {
-			if k == "cluster_lb" {
-				cluster.Cluster_LB = v
-			} else if strings.HasPrefix(k, "web") {
-				cluster.Webs[k] = v
-			}
-		}
-		clusters[name] = cluster
-	}
-
 	totalLBs = len(clusters)
 
 	// execute "hostname -i"
 	cmd := exec.Command("hostname", "-i")
 	output, err := cmd.Output()
 	if err != nil {
-		fmt.Printf("Error executing command: %v\n", err)
-		return
+		panic(err)
 	}
+	ipAddresses := strings.Fields(string(output))
 
-	// split output results by spaces and assign to array
-	ip_addresses := strings.Fields(string(output))
-	// take own Cluster_LB IP address
-	ownClusterLB = ip_addresses[1]
+	if strings.HasPrefix(ipAddresses[0], "172.") {
+		ownClusterLB = ipAddresses[0]
+	} else {
+		ownClusterLB = ipAddresses[1]
+	}
+	fmt.Println("ownClusterLB:", ownClusterLB, ipAddresses)
 
-	// fmt.Println(totalLBs, ownClusterLB, clusters)
-	fmt.Println(totalLBs, ownClusterLB)
-
-	var id int
+	var id, idWeb int
 	for _, cluster := range clusters {
-		if cluster.Cluster_LB == ownClusterLB {
-			// 自クラスタの Web サーバを抽出
-			for key, ip := range cluster.Webs {
-				if strings.HasPrefix(key, "web") {
-					ownWebServers = append(ownWebServers, ip)
+		clusterLBIP := cluster.InternalList["cluster_lb"]
+		if clusterLBIP == ownClusterLB {
+			for k, v := range cluster.AdjacentList {
+				fmt.Println(k, v, id)
+				// 隣接リストの登録
+				clusterLBs = append(clusterLBs, LoadBalancer{
+					ID:        id,
+					Address:   v,
+					IsHealthy: true,
+					Data:      0,
+					Weight:    0,
+				})
+				id++
+			}
+			// 自クラスタの Web サーバ登録
+			for k, v := range cluster.InternalList {
+				if strings.HasPrefix(k, "web") {
+					ownWebServers = append(ownWebServers, v)
 				}
 			}
-			// fmt.Printf("自クラスタ (%s): Webサーバ: %v\n", name, ownWebServers)
-		} else {
-			// 他クラスタの LB を clusterLBs に追加
-			// fmt.Printf("%v(%T) %v(%T)\n", name, name, cluster, cluster)
-			clusterLBs = append(clusterLBs, LoadBalancer{
-				ID:        id,
-				Address:   cluster.Cluster_LB,
-				IsHealthy: true,
-				Data:      0,
-				Weight:    0,
-			})
-			id++
 		}
 	}
 
-	for _, web := range ownWebServers {
+	// 自クラスタWebサーバ構造体へ追加
+	for _, ip := range ownWebServers {
 		webServers = append(webServers, webServer{
-			IP: web,
-			Weight: 0,
+			ID:       idWeb,
+			IP:       ip,
+			Weight:   0,
 			Sessions: 0,
 		})
+		idWeb++
 	}
+
+	sort.Slice(clusterLBs, func(i, j int) bool {
+		return getLastOctet(clusterLBs[i].Address) < getLastOctet(clusterLBs[j].Address)
+	})
+	sort.Slice(webServers, func(i, j int) bool {
+		return getLastOctet(webServers[i].IP) < getLastOctet(webServers[j].IP)
+	})
+
+	for i := range clusterLBs {
+		getLastOctet(clusterLBs[i].Address)
+		clusterLBs[i].ID = i
+	}
+	for i := range webServers {
+		lastOctet := getLastOctet(webServers[i].IP)
+		webServers[i].ID = lastOctet % 10
+	}
+
+	// 確認表示
+	fmt.Println("ClusterLBs:")
+	for _, lb := range clusterLBs {
+		fmt.Printf("- %s (ID: %d)\n", lb.Address, lb.ID)
+	}
+
+	fmt.Println("Own Web Servers:")
+	for _, ws := range webServers {
+		fmt.Println("- " + ws.IP)
+	}
+
+	fmt.Println(clusterLBs, ownWebServers, webServers)
 
 	fmt.Println(clusterLBs, ownWebServers, webServers)
 	isLeader = ownClusterLB == leaderLB // リーダーLBだけ true にする
@@ -183,6 +207,20 @@ func main(){
 		fmt.Println(queue)
 		time.Sleep(time.Duration(sleepTime) * time.Second)
 	}
+}
+
+func getLastOctet(ip string) int {
+    parts := strings.Split(ip, ".")
+    if len(parts) != 4 {
+        fmt.Println("Invalid IP address format:", ip)
+        return -1
+    }
+    last, err := strconv.Atoi(parts[3])
+    if err != nil {
+        fmt.Println("Invalid IP address:", ip)
+        return -1
+    }
+    return last
 }
 
 func waitForAllLBsAndSyncStart(ctx context.Context, rdb *redis.Client, ownClusterLB string, totalLBs int, isLeader bool, redisKey string) {
