@@ -3,8 +3,8 @@
 KEY=0
 QTY_CLUSTER=$(($1))
 
-docker stop redis-server prometheus-federate
-docker rm redis-server prometheus-federate
+docker stop redis-server prometheus-federate grafana
+docker rm redis-server prometheus-federate grafana
 
 echo $QTY_CLUSTER
 

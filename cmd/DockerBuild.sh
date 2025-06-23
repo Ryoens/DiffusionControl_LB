@@ -44,6 +44,10 @@ read -p "Default Web Servers: " WEB_COUNT
 image_exists=$(docker image ls | grep lb | wc -l)
 echo $image_exists
 
+cd ..
+path=$(pwd)
+cd cmd
+
 if [ "$image_exists" -eq 0 ]; then
 	echo "make image lb"
 	docker image build ./ -t lb:latest
@@ -57,8 +61,11 @@ docker network create deployment --driver=bridge --subnet=10.0.255.0/24
 docker run -d --name redis-server -p 6379:6379 redis:latest
 docker network connect deployment redis-server
 # prometheus
-docker run -d --name prometheus-federate -p 9090:9090 -v /home/enk/docker/master/go_lb/prometheus/federation/prometheus.yml:/etc/prometheus/prometheus.yml prom/prometheus
+docker run -d --name prometheus-federate -p 9090:9090 -v $path/prometheus/federation/prometheus.yml:/etc/prometheus/prometheus.yml prom/prometheus
 docker network connect deployment prometheus-federate
+# grafana
+docker run -d --name=grafana -p 3000:3000 grafana/grafana
+docker network connect deployment grafana
 
 protoc --version
 echo $QTY_CLUSTER
@@ -82,7 +89,7 @@ services:
     ports:
       - :8001
     volumes:
-      - /home/enk/docker/master/go_lb/:/home/ubuntu
+      - $path/:/home/ubuntu
     networks:
       overlay-net:
       cluster${KEY}-net:
