@@ -23,7 +23,7 @@ index_to_cluster = {i: name for i, name in enumerate(cluster_names)}
 # グラフ構築
 if args[1] == "r":
     p = 0.3
-    seed = 0
+    seed = 3
     g = nx.fast_gnp_random_graph(cluster_count, p, seed)
     print("グラフの情報: ランダムグラフ", g)
 
