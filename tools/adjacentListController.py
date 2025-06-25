@@ -1,6 +1,7 @@
 import sys
 import json
 import networkx as nx
+import numpy as np
 import matplotlib.pyplot as plt
 
 args = sys.argv
@@ -19,6 +20,9 @@ print(f"クラスタ一覧: {cluster_names}")
 # ノード名とインデックスの対応
 cluster_to_index = {name: i for i, name in enumerate(cluster_names)}
 index_to_cluster = {i: name for i, name in enumerate(cluster_names)}
+
+# for debug
+# cluster_count = 20
 
 # グラフ構築
 if args[1] == "r":
@@ -45,9 +49,17 @@ print("隣接リスト")
 adj_list = nx.to_dict_of_lists(g)
 print(adj_list)
 
+# グラフ描画
+pos = {
+        n: (np.cos(2*i*np.pi/cluster_count), np.sin(2*i*np.pi/cluster_count))
+        for i, n in enumerate(g.nodes)
+    }
+
 # 可視化
-nx.draw_networkx(g)
+nx.draw_networkx(g, pos, node_color='skyblue')
 plt.show()
+filename = f"../data/figure_{args[1]}.png"
+plt.savefig(filename)
 
 # adjacentList.jsonの出力（クラスタ名＋IPに変換）
 adjacent_output = {}

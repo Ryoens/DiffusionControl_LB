@@ -16,7 +16,7 @@ NW上の拡散方程式を使用することでLB間のリクエストを平滑�
 ### 実行方法
 環境構築
 
-`apt install curl go protobuf-compiler jmeter`
+`apt install curl golang-go protobuf-compiler jmeter make python3-pip`
 
 コンテナの実行
 
