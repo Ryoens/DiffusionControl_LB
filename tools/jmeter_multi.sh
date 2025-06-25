@@ -6,15 +6,16 @@
 MAIN_URL="${1}"                   # 1番目の引数: フラッシュクラウド対象LBのURL
 DURATION_SEC="${2:-60}"            # 2番目の引数: 負荷時間（秒）
 MAIN_THREADS="${3:-50}"            # 3番目の引数: フラッシュクラウド対象LBの同時接続数
+NUM_CLUSTER="${4:-20}"
 
-# 全ターゲット一覧（フラッシュクラウド対象＋その他）
-all_targets=(
-    "http://114.51.4.2:8001"
-    "http://114.51.4.3:8001"
-    "http://114.51.4.4:8001"
-    "http://114.51.4.5:8001"
-    "http://114.51.4.6:8001"
-)
+all_targets=()
+count=0
+for count in $(seq 0 "$NUM_CLUSTER");
+do 
+  all_targets+=("\"http://172.18.4.$((count+2)):8001\"")
+done
+
+echo ${all_targets[*]}
 
 # ----------------------
 # jmxテンプレートの自動生成
@@ -42,22 +43,14 @@ EOF
 for target in "${all_targets[@]}"; do
     ip=$(echo "$target" | sed -E 's~https?://([^:/]+).*~\1~')
     port=$(echo "$target" | grep -oP ':(\d+)' | tr -d ':')
+    clean_target=$(echo "$target" | tr -d '"' | sed 's:/$::')
 
-    if [ "$target" == "$MAIN_URL" ]; then
+    if [ "$clean_target" = "$MAIN_URL" ]; then
         # フラッシュクラウド対象LB
         threads=$MAIN_THREADS
     else
         # その他LB
-        if [ "$MAIN_THREADS" -eq 10 ]; then
-          threads=1
-        else 
-          min=$(( MAIN_THREADS / 10 ))
-          max=$(( MAIN_THREADS / 5 ))
-
-          threads=$((RANDOM % (max - min + 1) + min ))
-        fi
-
-        echo $threads
+        threads=$(( MAIN_THREADS / 10 ))
     fi
 
 cat <<EOF >> temp_test.jmx

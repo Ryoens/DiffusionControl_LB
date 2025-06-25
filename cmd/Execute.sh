@@ -23,10 +23,12 @@ echo "-------- request OK --------"
 
 # webサーバ数の指定
 read -p "Number of Clusters to reduce Web Servers: " num_cluster
+flag=0
 
 if [[ $num_cluster -eq 0 ]]; then
   echo "default start"
 elif [[ $num_cluster -eq 1 ]]; then
+  flag=1
   read -p "Set number [Cluster] [WebServers]: " cls web
 else
   cls=()
@@ -44,7 +46,8 @@ echo ${cls[@]} ${web[@]}
 
 # クラスタ数をコンテナ数から取得
 container=$(docker ps --filter "name=_LB" --format "{{.Names}}" | head -n 1)
-KEY=${container:7:1}
+# KEY=${container:7:1}
+KEY=$(echo "$container" | sed -E 's/^Cluster([0-9]+)_LB$/\1/')
 echo "number of clusters: " $KEY
 
 read -p "Target Cluster for Flash Crowds [0:$KEY]: " cluster
@@ -118,7 +121,12 @@ do
     for count in $(seq 0 "$KEY");
     do
         # docker exec -d Cluster${count}_LB compiled/$compiled_file -t $feedback -q $threshold -k $kappa /bin/bash
-        docker exec -d Cluster${count}_LB compiled/$compiled_file -t $feedback -q $threshold -k $kappa ${cls[@]} ${web[@]} /bin/bash
+        if [ $flag -eq 1 ]; then
+          docker exec -d Cluster${count}_LB compiled/$compiled_file -t $feedback -q $threshold -k $kappa ${cls[@]} ${web[@]}
+        else
+          docker exec -d Cluster${count}_LB compiled/$compiled_file -t $feedback -q $threshold -k $kappa
+        fi
+        
         docker exec Cluster${count}_LB ps aux # goのプロセスが走っていなかったらやり直しにしたい
     done
 
@@ -140,7 +148,7 @@ do
     ## 負荷テスト(apache bench, apache jmeter, curl, wrk, etc...)
 
     # apache jmeterによる負荷テスト
-    ./../tools/jmeter_multi.sh $url $time $vus
+    ./../tools/jmeter_multi.sh $url $time $vus $KEY
     wait
     echo "All tests completed."
 
