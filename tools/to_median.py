@@ -49,11 +49,11 @@ def remove_empty_rows_per_file(csv_file):
     
     return output_file
 
-def process_all_clusters(input_dir, median_output_file):
+def process_all_clusters(input_dir, median_output_file, index):
     selected_columns = ["TotalQueue", "Queue", "CurrentResponse"]
     
-    all_data = {cluster: [] for cluster in range(5)}
-    for cluster_num in range(5):  # Cluster0 から Cluster4 まで
+    all_data = {cluster: [] for cluster in range(index)}
+    for cluster_num in range(index):  # Cluster0 から Cluster4 まで
         file_paths = find_csv_files(input_dir, cluster_num)
         for file in file_paths:
             cleaned_file = remove_empty_rows_per_file(file)
@@ -62,7 +62,7 @@ def process_all_clusters(input_dir, median_output_file):
                 all_data[cluster_num].append(df[selected_columns])
     
     max_length = max(max(len(df) for df in cluster_data) if cluster_data else 0 for cluster_data in all_data.values())
-    for cluster_num in range(5):
+    for cluster_num in range(index):
         for i in range(len(all_data[cluster_num])):
             if len(all_data[cluster_num][i]) < max_length:
                 padding = pd.DataFrame(np.nan, index=range(max_length - len(all_data[cluster_num][i])), columns=selected_columns)
@@ -72,7 +72,7 @@ def process_all_clusters(input_dir, median_output_file):
         max(len(df) for df in cluster_data) if cluster_data else 0
         for cluster_data in all_data.values()
     )
-    for cluster_num in range(5):
+    for cluster_num in range(index):
         for i in range(len(all_data[cluster_num])):
             df = all_data[cluster_num][i][selected_columns]
             if len(df) < max_length:
@@ -84,7 +84,7 @@ def process_all_clusters(input_dir, median_output_file):
     median_results = []
     for row in range(max_length):
         median_row = []
-        for cluster_num in range(5):
+        for cluster_num in range(index):
             if all_data[cluster_num]:
                 stacked_data = np.stack([
                     df.iloc[row].to_numpy()
@@ -103,7 +103,7 @@ def process_all_clusters(input_dir, median_output_file):
         median_results.append(median_row)
     
     columns = []
-    for cluster_num in range(5):
+    for cluster_num in range(index):
         for col in selected_columns:
             columns.append(f"Cluster{cluster_num}_{col}")
 
@@ -115,10 +115,14 @@ def process_all_clusters(input_dir, median_output_file):
 def main():
     parser = argparse.ArgumentParser(description="全クラスタのCSVを処理し、中央値を算出")
     parser.add_argument("directory", type=str, help="CSVファイルが存在するディレクトリを指定")
+    parser.add_argument("cluster_index", type=int, help="クラスタ番号を指定（+1されて処理に使用）")
     args = parser.parse_args()
+
+    adjusted_index = args.cluster_index + 1
+    print(adjusted_index)
     
     median_output_csv = os.path.join(args.directory, "median_all_clusters.csv")
-    process_all_clusters(args.directory, median_output_csv)
+    process_all_clusters(args.directory, median_output_csv, adjusted_index)
 
 if __name__ == "__main__":
     main()

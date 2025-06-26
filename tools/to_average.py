@@ -49,11 +49,11 @@ def remove_empty_rows_per_file(csv_file):
     
     return output_file
 
-def process_all_clusters(input_dir, avg_output_file):
+def process_all_clusters(input_dir, avg_output_file, index):
     selected_columns = ["TotalQueue", "Queue", "CurrentResponse"]
     
-    all_data = {cluster: [] for cluster in range(5)}
-    for cluster_num in range(5):  # Cluster0 から Cluster4 まで
+    all_data = {cluster: [] for cluster in range(index)}
+    for cluster_num in range(index):  # Cluster0 から Cluster4 まで
         file_paths = find_csv_files(input_dir, cluster_num)
         for file in file_paths:
             cleaned_file = remove_empty_rows_per_file(file)
@@ -65,7 +65,7 @@ def process_all_clusters(input_dir, avg_output_file):
         max(len(df) for df in cluster_data) if cluster_data else 0
         for cluster_data in all_data.values()
     )
-    for cluster_num in range(5):
+    for cluster_num in range(index):
         for i in range(len(all_data[cluster_num])):
             df = all_data[cluster_num][i][selected_columns]
             if len(df) < max_length:
@@ -77,7 +77,7 @@ def process_all_clusters(input_dir, avg_output_file):
     avg_results = []
     for row in range(max_length):
         avg_row = []
-        for cluster_num in range(5):
+        for cluster_num in range(index):
             if all_data[cluster_num]:
                 # 各ファイルの指定行をスタック
                 stacked_data = np.stack([
@@ -97,7 +97,7 @@ def process_all_clusters(input_dir, avg_output_file):
         avg_results.append(avg_row)
 
     columns = []
-    for cluster_num in range(5):
+    for cluster_num in range(index):
         for col in selected_columns:
             columns.append(f"Cluster{cluster_num}_{col}")
             
@@ -110,10 +110,14 @@ def process_all_clusters(input_dir, avg_output_file):
 def main():
     parser = argparse.ArgumentParser(description="全クラスタのCSVを処理し、平均値を算出")
     parser.add_argument("directory", type=str, help="CSVファイルが存在するディレクトリを指定")
+    parser.add_argument("cluster_index", type=int, help="クラスタ番号を指定（+1されて処理に使用）")
     args = parser.parse_args()
+
+    adjusted_index = args.cluster_index + 1
+    print(adjusted_index)
     
     avg_output_csv = os.path.join(args.directory, "average_all_clusters.csv")
-    process_all_clusters(args.directory, avg_output_csv)
+    process_all_clusters(args.directory, avg_output_csv, adjusted_index)
 
 if __name__ == "__main__":
     main()

@@ -372,12 +372,12 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 
 	originalLB := r.Header.Get("X-Original-LB")
 	if originalLB == "" {
-		// fmt.Println("source: external user")
-	} else if originalLB == "114.51.4.2" {
-		// fmt.Println("source LB address:", originalLB)
+		fmt.Println("source: external user")
+	} else if originalLB == "172.18.4.2" {
+		fmt.Println("source LB address:", originalLB)
 		firstReceivedCount++
 	} else {
-		// fmt.Println("source adjacentLB address:", originalLB)
+		fmt.Println("source adjacentLB address:", originalLB)
 		adjacentQueueCount++
 	}
 

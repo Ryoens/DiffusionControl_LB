@@ -15,6 +15,7 @@ do
   all_targets+=("\"http://172.18.4.$((count+2)):8001\"")
 done
 
+echo $MAIN_URL $DURATION_SEC $MAIN_THREADS $NUM_CLUSTER
 echo ${all_targets[*]}
 
 # ----------------------
@@ -41,7 +42,7 @@ EOF
 # 各ターゲット用のThreadGroupを生成
 # ----------------------
 for target in "${all_targets[@]}"; do
-    ip=$(echo "$target" | sed -E 's~https?://([^:/]+).*~\1~')
+    ip=$(echo "$target" | sed -E 's/^"(.*)"$/\1/' | sed -E 's~https?://([^:/]+).*~\1~')
     port=$(echo "$target" | grep -oP ':(\d+)' | tr -d ':')
     clean_target=$(echo "$target" | tr -d '"' | sed 's:/$::')
 
@@ -54,7 +55,7 @@ for target in "${all_targets[@]}"; do
     fi
 
 cat <<EOF >> temp_test.jmx
-      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Target-$ip" enabled="true">
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Target-\${ip}" enabled="true">
         <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController">
           <boolProp name="LoopController.continue_forever">false</boolProp>
@@ -67,7 +68,7 @@ cat <<EOF >> temp_test.jmx
         <stringProp name="ThreadGroup.delay">0</stringProp>
       </ThreadGroup>
       <hashTree>
-        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="HTTP Request to $ip" enabled="true">
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="HTTP Request to \${ip}" enabled="true">
           <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
             <collectionProp name="Arguments.arguments"/>
           </elementProp>

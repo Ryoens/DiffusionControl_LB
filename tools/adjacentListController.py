@@ -58,7 +58,7 @@ pos = {
 # 可視化
 nx.draw_networkx(g, pos, node_color='skyblue')
 plt.show()
-filename = f"../data/figure_{args[1]}.png"
+filename = f"../../data/figure_{args[1]}.png"
 plt.savefig(filename)
 
 # adjacentList.jsonの出力（クラスタ名＋IPに変換）

@@ -21,6 +21,11 @@ echo $vus $attempt
 
 echo "-------- request OK --------"
 
+# NWモデルの指定
+read -p "NW model [f: fullmesh, r: random, ba: balabasi and albert]: " nw_model
+python3 ../tools/adjacentListController.py $nw_model
+echo "-------- NW model OK --------"
+
 # webサーバ数の指定
 read -p "Number of Clusters to reduce Web Servers: " num_cluster
 flag=0
@@ -42,7 +47,6 @@ else
 fi
 
 echo ${cls[@]} ${web[@]}
-# exit 1
 
 # クラスタ数をコンテナ数から取得
 container=$(docker ps --filter "name=_LB" --format "{{.Names}}" | head -n 1)
@@ -159,7 +163,7 @@ do
         echo "Cluster$i" 
         timestamp=$(date +"%Y%m%d_%H%M%S")
         # 現在のディレクトリとは離れたところにデータを残す
-        curl -X GET 114.51.4.$num:8002 -o "${data_dir}/Cluster$i"_"$attempt_count"_"$timestamp.csv"
+        curl -X GET 172.18.4.$num:8002 -o "${data_dir}/Cluster$i"_"$attempt_count"_"$timestamp.csv"
     done
 
     # 計測結果ファイルの移動
@@ -172,6 +176,10 @@ do
     attempt_count=`expr $attempt_count + 1`
     sleep 5
 done
+
+# データの整形
+python3 ../tools/to_average.py ../../data/implement/lb_diff_t100_t0_k0_2_vus10 $KEY
+python3 ../tools/to_median.py ../../data/implement/lb_diff_t100_t0_k0_2_vus10 $KEY
 
 # パラメータなどをファイルに書き出し
 timestamp=$(date +"%Y%m%d_%H%M%S")
