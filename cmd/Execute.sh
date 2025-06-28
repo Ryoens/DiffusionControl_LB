@@ -23,7 +23,7 @@ echo "-------- request OK --------"
 
 # NWモデルの指定
 read -p "NW model [f: fullmesh, r: random, ba: balabasi and albert]: " nw_model
-python3 ../tools/adjacentListController.py $nw_model
+echo $nw_model
 echo "-------- NW model OK --------"
 
 # webサーバ数の指定
@@ -48,6 +48,10 @@ fi
 
 echo ${cls[@]} ${web[@]}
 
+# 隣接リストの作成
+python3 ../tools/adjacentListController.py $nw_model ${cls[@]} ${web[@]}
+echo "Created adjacentList per cluster"
+
 # クラスタ数をコンテナ数から取得
 container=$(docker ps --filter "name=_LB" --format "{{.Names}}" | head -n 1)
 # KEY=${container:7:1}
@@ -61,7 +65,7 @@ if ! [[ "$cluster" =~ ^[0-9]+$ ]] || [ "$cluster" -ge "$KEY" ]; then
 fi
     
 ip_last=$((2 + cluster))
-url="http://114.51.4.${ip_last}:8001"
+url="http://172.18.4.${ip_last}:8001"
 echo "Target URL: $url"
 
 echo "-------- URL OK --------"
