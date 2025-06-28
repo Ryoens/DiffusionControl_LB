@@ -28,7 +28,6 @@ echo "-------- NW model OK --------"
 
 # webサーバ数の指定
 read -p "Number of Clusters to reduce Web Servers: " num_cluster
-flag=0
 
 if [[ $num_cluster -eq 0 ]]; then
   echo "default start"
@@ -128,13 +127,7 @@ do
 
     for count in $(seq 0 "$KEY");
     do
-        # docker exec -d Cluster${count}_LB compiled/$compiled_file -t $feedback -q $threshold -k $kappa /bin/bash
-        if [ $flag -eq 1 ]; then
-          docker exec -d Cluster${count}_LB compiled/$compiled_file -t $feedback -q $threshold -k $kappa ${cls[@]} ${web[@]}
-        else
-          docker exec -d Cluster${count}_LB compiled/$compiled_file -t $feedback -q $threshold -k $kappa
-        fi
-        
+        docker exec -d Cluster${count}_LB compiled/$compiled_file -t $feedback -q $threshold -k $kappa /bin/bash
         docker exec Cluster${count}_LB ps aux # goのプロセスが走っていなかったらやり直しにしたい
     done
 
