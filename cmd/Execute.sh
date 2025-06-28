@@ -127,7 +127,7 @@ do
 
     for count in $(seq 0 "$KEY");
     do
-        docker exec -d Cluster${count}_LB compiled/$compiled_file -t $feedback -q $threshold -k $kappa /bin/bash
+        docker exec -d Cluster${count}_LB compiled/$compiled_file $cluster -t $feedback -q $threshold -k $kappa /bin/bash
         docker exec Cluster${count}_LB ps aux # goのプロセスが走っていなかったらやり直しにしたい
     done
 

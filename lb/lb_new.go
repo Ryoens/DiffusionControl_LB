@@ -100,6 +100,9 @@ var (
 	flushOnStartup = false
 	isTransport bool
 
+	firstRecievedIP string
+	leaderLB string
+
 	rdb = redis.NewClient(&redis.Options{
 		Addr: "10.0.255.2:6379",
 		DB:   0,
@@ -158,32 +161,42 @@ const (
 
 	redisHost  = "10.0.255.2:6379"
 	redisKey   = "ready:"
-	leaderLB   = "172.18.4.2"
 	syncChan   = "sync_start"
 	logFile = "./log/output.csv"
 )
 
 func init(){
-	// 引数の取得
-	t := flag.Int("t", 0, "feedback information")
-	q := flag.Int("q", 0, "threshold")
-	k := flag.Float64("k", 0.0, "diffusion coefficient")
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: go run main.go <positional> -t <value> -q <value> -k <value>")
+		os.Exit(1)
+	}
+	positionalArg := os.Args[1]
 
-	flag.Parse()
-	feedback = *t
-    threshold = *q
-    kappa = *k
-
-	args := flag.Args()
-	if len(args)%2 != 0 {
-		fmt.Println("Error: Remaining arguments must be even (half clusters, half web servers).")
+	clusterNum, err := strconv.Atoi(positionalArg)
+	if err != nil {
+		fmt.Println("Invalid positional argument:", positionalArg)
 		os.Exit(1)
 	}
 
+	flagSet := flag.NewFlagSet("args", flag.ExitOnError)
+	
+	var t, q int
+	var k float64
+
+	// 引数の取得
+	flagSet.IntVar(&t, "t", 0, "feedback information")
+	flagSet.IntVar(&q, "q", 0, "threshold")
+	flagSet.Float64Var(&k, "k", 0.0, "diffusion coefficient")
+
+	flagSet.Parse(os.Args[2:])
+	feedback = t
+    threshold = q
+    kappa = k
+
+	fmt.Printf("Cluster Number: %d\n", clusterNum)
 	fmt.Printf("feedback -t : %d\n", feedback)
     fmt.Printf("threshold -q : %d\n", threshold)
     fmt.Printf("kappa -k : %.2f\n", kappa)
-	fmt.Println("remain: ", args)
 
 	// open json file 
 	file, err := os.Open("./json/adjacentList.json")
@@ -225,6 +238,12 @@ func init(){
 	for _, cluster := range clusters {
 		clusterLBIP := cluster.InternalList["cluster_lb"]
 		if clusterLBIP == ownClusterLB {
+			lastOctet := getLastOctet(clusterLBIP)
+			if (lastOctet - clusterNum) == 2 {
+				firstRecievedIP = clusterLBIP
+				leaderLB = clusterLBIP
+			}
+			fmt.Println(clusterLBIP, ownClusterLB, firstRecievedIP, leaderLB)
 			for _, v := range cluster.AdjacentList {
 				// 隣接リストの登録
 				clusterLBs = append(clusterLBs, LoadBalancer{
@@ -274,31 +293,6 @@ func init(){
 	}
 
 	fmt.Println(clusterLBs, ownWebServers, webServers)
-
-	// ここに受け取ったargsからcluster, webで分離してwebサーバ数を減らす
-	half := len(args) / 2
-	clusterArgs := args[:half]
-	webArgs := args[half:]
-
-	fmt.Println(half, clusterArgs, webArgs)
-
-	for i, cls := range clusterArgs {
-		fmt.Println(i, cls, webArgs[i])
-
-		// 自身のIPアドレスがwebサーバを減らすべき対象のクラスタと一致する場合
-		if (getLastOctet(ownClusterLB) - 2) == i  {
-			num, err := strconv.Atoi(webArgs[i])
-			if err != nil {
-				fmt.Println("Error: invalid webArgs value", webArgs[i])
-				continue
-			}
-			webNum := len(webServers) - num
-			fmt.Println("webnum: ", webNum)
-			webServers = webServers[:len(webServers)-webNum]
-		}
-	}
-
-	fmt.Println(webServers)
 
 	// exporterの登録
 	prometheus.MustRegister(activeSessions)
@@ -399,7 +393,7 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 	originalLB := r.Header.Get("X-Original-LB")
 	if originalLB == "" {
 		// fmt.Println("source: external user")
-	} else if originalLB == "114.51.4.2" {
+	} else if originalLB == firstRecievedIP {
 		// fmt.Println("source LB address:", originalLB)
 		firstReceivedCount++
 	} else {
