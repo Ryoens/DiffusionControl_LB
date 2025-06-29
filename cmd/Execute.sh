@@ -174,8 +174,8 @@ do
 done
 
 # データの整形
-python3 ../tools/to_average.py ../../data/implement/lb_diff_t100_t0_k0_2_vus10 $KEY
-python3 ../tools/to_median.py ../../data/implement/lb_diff_t100_t0_k0_2_vus10 $KEY
+python3 ../tools/to_average.py $data_dir $KEY
+python3 ../tools/to_median.py $data_dir $KEY
 
 # パラメータなどをファイルに書き出し
 timestamp=$(date +"%Y%m%d_%H%M%S")
