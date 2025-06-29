@@ -32,7 +32,6 @@ read -p "Number of Clusters to reduce Web Servers: " num_cluster
 if [[ $num_cluster -eq 0 ]]; then
   echo "default start"
 elif [[ $num_cluster -eq 1 ]]; then
-  flag=1
   read -p "Set number [Cluster] [WebServers]: " cls web
 else
   cls=()
@@ -186,4 +185,5 @@ echo "feedback: $feedback [ms]"
 echo "threshold: $threshold"
 echo "kappa: $kappa"
 echo "virtual users: $vus [users]"
+echo "network model: $nw_model"
 } > "${data_dir}/parameters"_"$timestamp".txt

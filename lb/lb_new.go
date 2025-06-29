@@ -99,6 +99,7 @@ var (
 	isLeader bool
 	flushOnStartup = false
 	isTransport bool
+	ownNumber string
 
 	firstRecievedIP string
 	leaderLB string
@@ -114,14 +115,20 @@ var (
 		IdleConnTimeout:     90 * time.Second,
 	}
 
-	activeSessions = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "active_sessions",
-		Help: "現在アクティブなセッション数",
-	})
-	totalRequests = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "total_requests",
-		Help: "合計リクエスト数",
-	})
+	activeSessions = prometheus.NewGaugeVec(
+        prometheus.GaugeOpts{
+            Name: "active_sessions",
+            Help: "現在アクティブなセッション数",
+        },
+        []string{"cluster", "instance"},
+    )
+    totalRequests = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "total_requests",
+            Help: "合計リクエスト数",
+        },
+        []string{"cluster", "instance"},
+    )
 
 	// 評価用パラメータ
 	queue        int // 処理待ちTCPセッション数
@@ -182,6 +189,7 @@ func init(){
 	
 	var t, q int
 	var k float64
+	ownNumber = positionalArg
 
 	// 引数の取得
 	flagSet.IntVar(&t, "t", 0, "feedback information")
@@ -385,8 +393,9 @@ func main(){
 func lbHandler(w http.ResponseWriter, r *http.Request) {
 	isTransport = false
 	mutex.Lock()
-	activeSessions.Inc()
-	totalRequests.Inc()
+	// activeSessions.Inc()
+	activeSessions.WithLabelValues(ownNumber, ownClusterLB).Inc()
+	totalRequests.WithLabelValues(ownNumber, ownClusterLB).Inc()
 	totalQueue++
 	queue++ // 処理待ちセッション数をインクリメント
 
@@ -445,7 +454,8 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 
 		proxy.ModifyResponse = func(res *http.Response) error {
 			mutex.Lock()
-			activeSessions.Dec()
+			// activeSessions.Dec()
+			activeSessions.WithLabelValues(ownNumber, ownClusterLB).Dec()
 			queue-- // 処理完了後にデクリメント
 			currentTransport++
 			mutex.Unlock()
@@ -458,7 +468,8 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 		// レスポンスを書き換える -> 内部のwebサーバへ送る場合
 		proxy.ModifyResponse = func(res *http.Response) error {
 			mutex.Lock()
-			activeSessions.Dec()
+			// activeSessions.Dec()
+			activeSessions.WithLabelValues(ownNumber, ownClusterLB).Dec()
 			queue-- // 処理完了後にデクリメント
 			responseCount++ 
 			mutex.Unlock()

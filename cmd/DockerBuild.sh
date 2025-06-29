@@ -147,7 +147,7 @@ done
 echo "}" >> $JSON_FILE
 
 # prometheus.yml設定
-pwd # /home/enk/docker/master/go_lb/cmd
+pwd # ~/cmd
 cd ../
 BASE_PATH="prometheus"
 FEDERATION_PATH="$BASE_PATH/federation/prometheus.yml"
@@ -157,7 +157,7 @@ FED_TARGETS=()
 
 count=0
 container=$(docker ps --filter "name=_LB" --format "{{.Names}}" | head -n 1)
-KEY=${container:7:1}
+KEY=$(echo "$container" | sed -E 's/^Cluster([0-9]+)_LB$/\1/')
 
 for count in $(seq 0 "$KEY");
 do 
