@@ -114,7 +114,6 @@ def main():
     args = parser.parse_args()
 
     adjusted_index = args.cluster_index + 1
-    print(adjusted_index)
     
     avg_output_csv = os.path.join(args.directory, "average_all_clusters.csv")
     process_all_clusters(args.directory, avg_output_csv, adjusted_index)

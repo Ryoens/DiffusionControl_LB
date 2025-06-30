@@ -1,4 +1,81 @@
 #!/bin/bash
+
+run_experiment() {
+  local threshold="$1"
+  local kappa="$2"
+  local safe_kappa=$(echo "$kappa" | sed 's/\./_/g')
+  local time=60
+  local attempt_count=1
+
+  local dirname="${compiled_file}_t${threshold}_k${safe_kappa}_vus${vus}"
+  local data_dir="../../data/implement/${dirname}"
+  mkdir -p "$data_dir"
+
+  echo "Running experiment with threshold=$threshold, kappa=$kappa"
+
+  while [ $attempt_count -le $attempt ]; do
+    echo "Attempt $attempt_count"
+    count=0
+
+    # LB 実行
+    for count in $(seq 0 "$KEY"); do
+      docker exec -d Cluster${count}_LB compiled/$compiled_file $cluster -t $feedback -q $threshold -k $kappa
+      docker exec Cluster${count}_LB ps aux
+    done
+
+    # Redisキーの待機
+    while true; do
+      key_list=$(docker exec -i redis-server redis-cli --raw keys 'lb_ready:*')
+      key_count=$(echo "$key_list" | tr ' ' '\n' | grep -c '^lb_ready:')
+      echo "waiting... $key_count/$((KEY + 1))"
+      if [ "$key_count" -eq $((KEY + 1)) ]; then
+        break
+      fi
+      sleep 1
+    done
+
+    # JMeter 実行
+    ./../tools/jmeter_multi.sh $url $time $vus $KEY
+    wait
+    echo "All tests completed."
+
+    # データ取得
+    for num in $(seq 2 $((KEY + 2))); do 
+      i=$((num - 2))
+      timestamp=$(date +"%Y%m%d_%H%M%S")
+      curl -X GET "172.18.4.${num}:8002" -o "${data_dir}/Cluster${i}_${attempt_count}_${timestamp}.csv"
+    done
+
+    # JMeterログ移動
+    timestamp=$(date +"%Y%m%d_%H%M%S")
+    rm -f ../log/output.csv temp_test.jmx
+    mv ../log/jmeter.log "${data_dir}/jmeter_${attempt_count}_${timestamp}.log"
+    mv ../log/result_60s.jtl "${data_dir}/jmeter_result${time}s_${attempt_count}_${timestamp}.jtl"
+
+    # Redis初期化
+    docker exec -it redis-server redis-cli flushall
+    attempt_count=$((attempt_count + 1))
+    sleep 5
+  done
+
+  # 結果整形
+  python3 ../tools/to_average.py $data_dir $KEY
+  python3 ../tools/to_median.py $data_dir $KEY
+
+  # パラメータ記録
+  timestamp=$(date +"%Y%m%d_%H%M%S")
+  {
+    echo "Experiment in these parameters is finished"
+    echo "feedback: $feedback [ms]"
+    echo "threshold: $threshold"
+    echo "kappa: $kappa"
+    echo "virtual users: $vus [users]"
+    echo "network model: $nw_model"
+  } > "${data_dir}/parameters_${timestamp}.txt"
+}
+
+# ----------------------
+
 count=0
 attempt_count=1
 time=60
@@ -33,6 +110,7 @@ echo ${cls[@]} ${web[@]}
 
 # フラッシュクラウド対象サーバの指定
 container=$(docker ps --filter "name=_LB" --format "{{.Names}}" | head -n 1)
+echo $container
 KEY=$(echo "$container" | sed -E 's/^Cluster([0-9]+)_LB$/\1/')
 echo "number of clusters: $KEY"
 
@@ -127,78 +205,9 @@ elif [[ $flag -eq 2 ]]; then
         run_experiment $threshold ${kappa_values[0]}
     done
 else
+    threshold=${threshold_values[0]}
+    kappa=${kappa_values[0]}
+    echo "=== threshold=$threshold, kappa=$kappa ==="
     run_experiment $threshold $kappa
     echo "end"
 fi
-
-run_experiment() {
-  local threshold="$1"
-  local kappa="$2"
-  local safe_kappa=$(echo "$kappa" | sed 's/\./_/g')
-  local time=60
-  local attempt_count=1
-
-  local dirname="${compiled_file}_t${threshold}_k${safe_kappa}_vus${vus}"
-  local data_dir="../../data/implement/${dirname}"
-  mkdir -p "$data_dir"
-
-  echo "Running experiment with threshold=$threshold, kappa=$kappa"
-
-  while [ $attempt_count -le $attempt ]; do
-    echo "Attempt $attempt_count"
-
-    # LB 実行
-    for count in $(seq 0 "$KEY"); do
-      docker exec -d Cluster${count}_LB compiled/$compiled_file $cluster -t $threshold -q $threshold -k $kappa /bin/bash
-    done
-
-    # Redisキーの待機
-    while true; do
-      key_list=$(docker exec -i redis-server redis-cli --raw keys 'lb_ready:*')
-      key_count=$(echo $key_list | grep -c '^lb_ready:')
-      echo "waiting... $key_count/$((KEY + 1))"
-      if [ "$key_count" -eq $((KEY + 1)) ]; then
-        break
-      fi
-      sleep 1
-    done
-
-    # JMeter 実行
-    ./../tools/jmeter_multi.sh $url $time $vus $KEY
-    wait
-
-    # データ取得
-    for num in $(seq 2 $((KEY + 2))); do 
-      i=$((num - 2))
-      timestamp=$(date +"%Y%m%d_%H%M%S")
-      curl -X GET "172.18.4.${num}:8002" -o "${data_dir}/Cluster${i}_${attempt_count}_${timestamp}.csv"
-    done
-
-    # JMeterログ移動
-    timestamp=$(date +"%Y%m%d_%H%M%S")
-    rm -f ../log/output.csv temp_test.jmx
-    mv ../log/jmeter.log "${data_dir}/jmeter_${attempt_count}_${timestamp}.log"
-    mv ../log/result_60s.jtl "${data_dir}/jmeter_result${time}s_${attempt_count}_${timestamp}.jtl"
-
-    # Redis初期化
-    docker exec -it redis-server redis-cli flushall
-
-    attempt_count=$((attempt_count + 1))
-    sleep 5
-  done
-
-  # 結果整形
-  python3 ../tools/to_average.py $data_dir $KEY
-  python3 ../tools/to_median.py $data_dir $KEY
-
-  # パラメータ記録
-  timestamp=$(date +"%Y%m%d_%H%M%S")
-  {
-    echo "Experiment in these parameters is finished"
-    echo "feedback: $feedback [ms]"
-    echo "threshold: $threshold"
-    echo "kappa: $kappa"
-    echo "virtual users: $vus [users]"
-    echo "network model: $nw_model"
-  } > "${data_dir}/parameters_${timestamp}.txt"
-}

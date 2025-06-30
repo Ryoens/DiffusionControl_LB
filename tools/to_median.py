@@ -119,7 +119,6 @@ def main():
     args = parser.parse_args()
 
     adjusted_index = args.cluster_index + 1
-    print(adjusted_index)
     
     median_output_csv = os.path.join(args.directory, "median_all_clusters.csv")
     process_all_clusters(args.directory, median_output_csv, adjusted_index)
