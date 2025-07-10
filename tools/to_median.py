@@ -31,15 +31,15 @@ def remove_empty_rows_per_file(csv_file):
     df_cleaned.reset_index(drop=True, inplace=True)
 
     # -------------------
-    drop_index = None
-    for i in range(1, len(df_cleaned)):
-        if df_cleaned.iloc[i].equals(df_cleaned.iloc[i - 1]):
-            drop_index = i
-            break
+    # drop_index = None
+    # for i in range(1, len(df_cleaned)):
+    #     if df_cleaned.iloc[i].equals(df_cleaned.iloc[i - 1]):
+    #         drop_index = i
+    #         break
 
-    if drop_index is not None:
-        df_cleaned = df_cleaned.iloc[:drop_index]
-        # print(f"2行連続で同じ数値を検出。{drop_index}行目以降を削除しました。")
+    # if drop_index is not None:
+    #     df_cleaned = df_cleaned.iloc[:drop_index]
+    #     # print(f"2行連続で同じ数値を検出。{drop_index}行目以降を削除しました。")
     # -------------------
     
     directory, base_name = os.path.split(csv_file)
@@ -84,6 +84,8 @@ def process_all_clusters(input_dir, median_output_file, index):
     median_results = []
     for row in range(max_length):
         median_row = []
+        skip_row = False
+
         for cluster_num in range(index):
             if all_data[cluster_num]:
                 stacked_data = np.stack([
@@ -92,16 +94,24 @@ def process_all_clusters(input_dir, median_output_file, index):
                     if row < len(df)
                 ])
                 if stacked_data.size > 0:
-                    try:
-                        median_row.extend(np.round(np.nanmedian(stacked_data, axis=0)).astype(int))
-                    except RuntimeWarning:
-                        median_row.extend([np.nan] * len(selected_columns))
+                    med_value = np.nanmedian(stacked_data, axis=0)
+
+                    if np.isnan(med_value).any():
+                        skip_row = True
+                        break
+
+                    median_row.extend([int(round(val)) for val in med_value])
                 else:
-                    median_row.extend([np.nan] * len(selected_columns))
+                    skip_row = True
+                    break
             else:
-                median_row.extend([np.nan] * len(selected_columns))
+                skip_row = True
+                break
+        if skip_row:
+            break
+        
         median_results.append(median_row)
-    
+
     columns = []
     for cluster_num in range(index):
         for col in selected_columns:

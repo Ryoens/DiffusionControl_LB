@@ -61,6 +61,7 @@ run_experiment() {
   # 結果整形
   python3 ../tools/to_average.py $data_dir $KEY
   python3 ../tools/to_median.py $data_dir $KEY
+  python3 ../tools/jmeter_scrayping.py $data_dir $attempt
 
   # パラメータ記録
   timestamp=$(date +"%Y%m%d_%H%M%S")
@@ -179,6 +180,7 @@ count=0
 # nameserverの設定, build
 for count in $(seq 0 "$KEY");
 do 
+    echo "== Cluster${count}_LB =="
     docker exec Cluster${count}_LB sh -c 'echo "nameserver 8.8.8.8" > /etc/resolv.conf'
     docker exec Cluster${count}_LB cat /etc/resolv.conf
     docker exec Cluster${count}_LB sh -c "go build -o compiled/$compiled_file lb/$apply_file"

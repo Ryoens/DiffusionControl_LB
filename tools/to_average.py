@@ -31,15 +31,15 @@ def remove_empty_rows_per_file(csv_file):
     df_cleaned.reset_index(drop=True, inplace=True)
 
     # -------------------
-    drop_index = None
-    for i in range(1, len(df_cleaned)):
-        if df_cleaned.iloc[i].equals(df_cleaned.iloc[i - 1]):
-            drop_index = i
-            break
+    # drop_index = None
+    # for i in range(1, len(df_cleaned)):
+    #     if df_cleaned.iloc[i].equals(df_cleaned.iloc[i - 1]):
+    #         drop_index = i
+    #         break
 
-    if drop_index is not None:
-        df_cleaned = df_cleaned.iloc[:drop_index]
-        # print(f"2行連続で同じ数値を検出。{drop_index}行目以降を削除しました。")
+    # if drop_index is not None:
+    #     df_cleaned = df_cleaned.iloc[:drop_index]
+    #     # print(f"2行連続で同じ数値を検出。{drop_index}行目以降を削除しました。")
     # -------------------
 
     directory, base_name = os.path.split(csv_file)
@@ -77,23 +77,34 @@ def process_all_clusters(input_dir, avg_output_file, index):
     avg_results = []
     for row in range(max_length):
         avg_row = []
+        skip_row = False  # ← NaNが出たらTrueにする
+
         for cluster_num in range(index):
             if all_data[cluster_num]:
-                # 各ファイルの指定行をスタック
                 stacked_data = np.stack([
                     df.iloc[row].to_numpy()
                     for df in all_data[cluster_num]
                     if row < len(df)
                 ])
                 if stacked_data.size > 0:
-                    try:
-                        avg_row.extend(np.round(np.nanmean(stacked_data, axis=0)).astype(int))  # 四捨五入して整数
-                    except RuntimeWarning:
-                        avg_row.extend([np.nan] * len(selected_columns))    
+                    avg_value = np.nanmean(stacked_data, axis=0)
+
+                    # NaNが1つでも含まれていたら打ち切る
+                    if np.isnan(avg_value).any():
+                        skip_row = True
+                        break
+
+                    avg_row.extend([int(round(val)) for val in avg_value])
                 else:
-                    avg_row.extend([np.nan] * len(selected_columns))
+                    skip_row = True
+                    break
             else:
-                avg_row.extend([np.nan] * len(selected_columns))
+                skip_row = True
+                break
+
+        if skip_row:
+            break  # この行以降をスキップして全体ループ終了
+
         avg_results.append(avg_row)
 
     columns = []

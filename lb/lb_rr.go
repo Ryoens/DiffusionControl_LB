@@ -81,7 +81,7 @@ var (
 	leaderLB string
 
 	rdb = redis.NewClient(&redis.Options{
-		Addr: "10.0.255.2:6379",
+		Addr: "172.18.4.22:6379",
 		DB:   0,
 	})
 
@@ -126,7 +126,8 @@ const (
 	sleepTime time.Duration = 1
 	getDataTime time.Duration = 100
 
-	redisHost  = "10.0.255.2:6379"
+	// redisHost  = "10.0.255.2:6379"
+	redisHost  = "172.18.4.22:6379"
 	redisKey   = "ready:"
 	syncChan   = "sync_start"
 	logFile = "./log/output.csv"
