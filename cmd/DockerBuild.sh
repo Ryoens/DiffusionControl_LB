@@ -55,17 +55,20 @@ else
 	echo "image lb exists"
 fi
 
+# if running without prometheus
 docker network create overlay-net --driver=bridge --subnet=172.18.4.0/24
-docker network create deployment --driver=bridge --subnet=10.0.255.0/24
-# redis
 docker run -d --name redis-server -p 6379:6379 redis:latest
-docker network connect deployment redis-server
-# prometheus
-docker run -d --name prometheus-federate -p 9090:9090 -v $path/prometheus/federation/prometheus.yml:/etc/prometheus/prometheus.yml prom/prometheus
-docker network connect deployment prometheus-federate
-# grafana
-docker run -d --name=grafana -p 3000:3000 grafana/grafana
-docker network connect deployment grafana
+
+# if running prometheus (uncomment out)
+# docker network create deployment --driver=bridge --subnet=10.0.255.0/24
+# # redis
+# docker network connect deployment redis-server
+# # prometheus
+# docker run -d --name prometheus-federate -p 9090:9090 -v $path/prometheus/federation/prometheus.yml:/etc/prometheus/prometheus.yml prom/prometheus
+# docker network connect deployment prometheus-federate
+# # grafana
+# docker run -d --name=grafana -p 3000:3000 grafana/grafana
+# docker network connect deployment grafana
 
 protoc --version
 echo $QTY_CLUSTER
@@ -139,58 +142,65 @@ EOF
     cd ../
 
     json_output
-    docker network connect deployment Cluster${KEY}_LB 
+
+    # if running prometheus (uncomment out)
+    # docker network connect deployment Cluster${KEY}_LB 
 
     KEY=$((KEY + 1))
 done
 
 echo "}" >> $JSON_FILE
 
-# prometheus.yml設定
-pwd # ~/cmd
-cd ../
-BASE_PATH="prometheus"
-FEDERATION_PATH="$BASE_PATH/federation/prometheus.yml"
+docker network connect overlay-net redis-server
 
-# federation用のターゲットを保持
-FED_TARGETS=()
+# if running prometheus (uncomment out)
+# docker network connect overlay-net prometheus-federate
+# docker network connect overlay-net grafana
 
-count=0
-container=$(docker ps --filter "name=_LB" --format "{{.Names}}" | head -n 1)
-KEY=$(echo "$container" | sed -E 's/^Cluster([0-9]+)_LB$/\1/')
+# # prometheus.yml設定
+# pwd # ~/cmd
+# cd ../
+# BASE_PATH="prometheus"
+# FEDERATION_PATH="$BASE_PATH/federation/prometheus.yml"
 
-for count in $(seq 0 "$KEY");
-do 
-  container_name="Cluster${count}_LB"
-  IP_Addresses=$(docker exec $container_name hostname -i)
-  IP_Array=($IP_Addresses)
+# # federation用のターゲットを保持
+# FED_TARGETS=()
 
-  FED_TARGETS+=("\"${IP_Array[2]}:9090\"")
-  # echo $IP_Addresses $IP_Array ${IP_Array[0]} ${IP_Array[1]} ${IP_Array[2]} $count
-done
+# count=0
+# container=$(docker ps --filter "name=_LB" --format "{{.Names}}" | head -n 1)
+# KEY=$(echo "$container" | sed -E 's/^Cluster([0-9]+)_LB$/\1/')
 
-echo ${FED_TARGETS[*]}
+# for count in $(seq 0 "$KEY");
+# do 
+#   container_name="Cluster${count}_LB"
+#   IP_Addresses=$(docker exec $container_name hostname -i)
+#   IP_Array=($IP_Addresses)
 
-# federation/prometheus.yml を生成
-mkdir -p "$(dirname "$FEDERATION_PATH")"
-FED_TARGETS_JOINED=$(IFS=,; echo "${FED_TARGETS[*]}")
-cat > "$FEDERATION_PATH" <<EOF
-global:
-  scrape_interval: 1s
+#   FED_TARGETS+=("\"${IP_Array[2]}:9090\"")
+# done
 
-scrape_configs:
-  - job_name: 'federate'
-    scrape_interval: 1s
-    honor_labels: true
-    metrics_path: '/federate'
-    params:
-      'match[]':
-        - '{job=~".+"}'
-    static_configs:
-      - targets: [ $FED_TARGETS_JOINED ]
-EOF
+# echo ${FED_TARGETS[*]}
 
-echo "federation/prometheus.yml を生成"
+# # federation/prometheus.yml を生成
+# mkdir -p "$(dirname "$FEDERATION_PATH")"
+# FED_TARGETS_JOINED=$(IFS=,; echo "${FED_TARGETS[*]}")
+# cat > "$FEDERATION_PATH" <<EOF
+# global:
+#   scrape_interval: 1s
 
-# prometheusコンテナ再起動
-docker kill -s HUP prometheus-federate
+# scrape_configs:
+#   - job_name: 'federate'
+#     scrape_interval: 1s
+#     honor_labels: true
+#     metrics_path: '/federate'
+#     params:
+#       'match[]':
+#         - '{job=~".+"}'
+#     static_configs:
+#       - targets: [ $FED_TARGETS_JOINED ]
+# EOF
+
+# echo "federation/prometheus.yml を生成"
+
+# # prometheusコンテナ再起動
+# docker kill -s HUP prometheus-federate

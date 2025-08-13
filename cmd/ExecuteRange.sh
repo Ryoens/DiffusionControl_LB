@@ -61,7 +61,7 @@ run_experiment() {
   # 結果整形
   python3 ../tools/to_average.py $data_dir $KEY
   python3 ../tools/to_median.py $data_dir $KEY
-  python3 ../tools/jmeter_scrayping.py $data_dir $attempt
+  ./../tools/jmeter_scrayping.sh $data_dir $attempt
 
   # パラメータ記録
   timestamp=$(date +"%Y%m%d_%H%M%S")
