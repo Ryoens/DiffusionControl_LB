@@ -11,7 +11,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math"
-	"math/rand"
+	// "math/rand"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -86,6 +86,7 @@ var (
 	webServers []webServer
 	ownWebServers []string
 	randomIndex webServer
+	adjacentIndex int
 
 	wg sync.WaitGroup
 	mutex sync.RWMutex
@@ -103,7 +104,7 @@ var (
 	leaderLB string
 
 	rdb = redis.NewClient(&redis.Options{
-		Addr: "172.18.4.22:6379",
+		Addr: "172.18.4.7:6379",
 		DB:   0,
 	})
 
@@ -150,7 +151,7 @@ const (
 	getDataTime time.Duration = 100
 
 	// redisHost  = "10.0.255.2:6379"
-	redisHost  = "172.18.4.22:6379"
+	redisHost  = "172.18.4.7:6379"
 	redisKey   = "ready:"
 	syncChan   = "sync_start"
 	logFile = "./log/output.csv"
@@ -456,17 +457,25 @@ func LeastConn_AdjacentLB() string {
         }
     }
 
-    // 同率ならランダムに一つ
-	rand.Seed(time.Now().UnixNano()) 
-    chosen := minIdxs[0]
-    if len(minIdxs) > 1 {
-        chosen = minIdxs[rand.Intn(len(minIdxs))]
-    }
+	log.Println("cands, minIdxs", cands, minIdxs)
+	
+	// If there are multiple backends to transfer
+	// select one from a Round-Robin
+	chosenIdxInMin := adjacentIndex % len(minIdxs)
+	chosen := minIdxs[chosenIdxInMin]
+	log.Println(chosenIdxInMin, chosen)
+	adjacentIndex++
+	
+	// select one from a Random
+	// rand.Seed(time.Now().UnixNano()) 
+    // chosen := minIdxs[0]
+    // if len(minIdxs) > 1 {
+    //     chosen = minIdxs[rand.Intn(len(minIdxs))]
+    // }
 
 	// デバッグ出力
     log.Printf("[LeastConn] chosen LB=%s(id=%d) data=%d transport=%d", clusterLBs[chosen].Address, clusterLBs[chosen].ID, clusterLBs[chosen].Data, clusterLBs[chosen].Transport)
 
-    // 選ばれたLBのTransportを更新し、webServer型にマッピングして返す
     clusterLBs[chosen].Transport++
 	return clusterLBs[chosen].Address + tcpPort
 }
