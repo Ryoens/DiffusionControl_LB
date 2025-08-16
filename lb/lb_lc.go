@@ -90,6 +90,7 @@ var (
 
 	wg sync.WaitGroup
 	mutex sync.RWMutex
+	rrTieMu sync.Mutex
 
 	ctx        = context.Background()
 	redisClient *redis.Client
@@ -461,11 +462,13 @@ func LeastConn_AdjacentLB() string {
 	
 	// If there are multiple backends to transfer
 	// select one from a Round-Robin
+	rrTieMu.Lock()
 	chosenIdxInMin := adjacentIndex % len(minIdxs)
 	chosen := minIdxs[chosenIdxInMin]
-	log.Println(chosenIdxInMin, chosen)
 	adjacentIndex++
-	
+	rrTieMu.Unlock()
+	log.Println(chosenIdxInMin, chosen)
+
 	// select one from a Random
 	// rand.Seed(time.Now().UnixNano()) 
     // chosen := minIdxs[0]
