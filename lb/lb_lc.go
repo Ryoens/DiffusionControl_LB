@@ -462,19 +462,19 @@ func LeastConn_AdjacentLB() string {
 	
 	// If there are multiple backends to transfer
 	// select one from a Round-Robin
-	rrTieMu.Lock()
-	chosenIdxInMin := adjacentIndex % len(minIdxs)
-	chosen := minIdxs[chosenIdxInMin]
-	adjacentIndex++
-	rrTieMu.Unlock()
-	log.Println(chosenIdxInMin, chosen)
+	// rrTieMu.Lock()
+	// chosenIdxInMin := adjacentIndex % len(minIdxs)
+	// chosen := minIdxs[chosenIdxInMin]
+	// adjacentIndex++
+	// rrTieMu.Unlock()
+	// log.Println(chosenIdxInMin, chosen)
 
 	// select one from a Random
-	// rand.Seed(time.Now().UnixNano()) 
-    // chosen := minIdxs[0]
-    // if len(minIdxs) > 1 {
-    //     chosen = minIdxs[rand.Intn(len(minIdxs))]
-    // }
+	rand.Seed(time.Now().UnixNano()) 
+    chosen := minIdxs[0]
+    if len(minIdxs) > 1 {
+        chosen = minIdxs[rand.Intn(len(minIdxs))]
+    }
 
 	// デバッグ出力
     log.Printf("[LeastConn] chosen LB=%s(id=%d) data=%d transport=%d", clusterLBs[chosen].Address, clusterLBs[chosen].ID, clusterLBs[chosen].Data, clusterLBs[chosen].Transport)
