@@ -11,6 +11,7 @@ import sys
 import json
 import subprocess
 import re
+import argparse
 from typing import Dict, List, Set, Tuple, Optional
 
 
@@ -205,31 +206,31 @@ class ClusterInfo:
         """
         print("\n=== リンク遅延設定 ===")
         print("遅延を設定する対象を選択してください:")
-        print("  1. 全リンクに対して遅延設定")
-        print("  2. 一部のリンクに対して手動で遅延設定")
-        print("  3. 既存の遅延設定を削除")
-        print("  4. 遅延なし(終了)")
+        print("  0. 全リンクに対して遅延設定")
+        print("  1. 一部のリンクに対して手動で遅延設定")
+        print("  2. 既存の遅延設定を削除")
+        print("  3. 遅延なし(終了)")
         
         while True:
             try:
-                choice = input("\n選択 (1-4): ").strip()
-                if choice not in ['1', '2', '3', '4']:
-                    print("エラー: 1, 2, 3, 4 のいずれかを入力してください")
+                choice = input("\n選択 (0-3): ").strip()
+                if choice not in ['0', '1', '2', '3']:
+                    print("エラー: 0, 1, 2, 3 のいずれかを入力してください")
                     continue
                 
                 choice_num = int(choice)
                 
-                # 4. 遅延なし
-                if choice_num == 4:
+                # 3. 遅延なし
+                if choice_num == 3:
                     print("遅延設定をスキップします.")
                     return (4, [], {})
                 
-                # 3. 遅延削除
-                if choice_num == 3:
+                # 2. 遅延削除
+                if choice_num == 2:
                     return (3, [], {})
                 
-                # 1. 全リンク
-                if choice_num == 1:
+                # 0. 全リンク
+                if choice_num == 0:
                     all_links = self.get_all_links()
                     delay_config = self._configure_all_links_delay(all_links)
                     if delay_config:
@@ -237,8 +238,8 @@ class ClusterInfo:
                     else:
                         continue
                 
-                # 2. 一部のリンク(手動選択)
-                if choice_num == 2:
+                # 1. 一部のリンク(手動選択)
+                if choice_num == 1:
                     selected_links = self._select_specific_links()
                     if selected_links:
                         delay_ms = self._get_delay_input()
@@ -264,17 +265,17 @@ class ClusterInfo:
             遅延設定辞書 {(src, dst): delay_ms} または None
         """
         print(f"\n全 {len(all_links)} リンクの遅延設定方法を選択してください:")
-        print("  1. 手動で同じ遅延を設定")
-        print("  2. ランダムに遅延を割り当て")
+        print("  0. 手動で同じ遅延を設定")
+        print("  1. ランダムに遅延を割り当て")
         
         while True:
             try:
-                method = input("\n選択 (1-2): ").strip()
-                if method not in ['1', '2']:
-                    print("エラー: 1 または 2 を入力してください")
+                method = input("\n選択 (0-1): ").strip()
+                if method not in ['0', '1']:
+                    print("エラー: 0 または 1 を入力してください")
                     continue
                 
-                if method == '1':
+                if method == '0':
                     # 手動で同じ遅延
                     delay_ms = self._get_delay_input()
                     delay_config = {link: delay_ms for link in all_links}
@@ -631,8 +632,153 @@ class ClusterInfo:
             return False
 
 
+def parse_arguments():
+    """コマンドライン引数をパース"""
+    parser = argparse.ArgumentParser(
+        description='クラスタ間リンク遅延制御ツール',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+使用方法:
+  python3 delayController.py [mode] [options...]
+
+モード:
+  0 : 全リンクに遅延設定
+  1 : 一部リンクに遅延設定
+  2 : 遅延を削除
+  3 : 遅延なし（情報表示のみ）
+
+例:
+  # インタラクティブモード（引数なし）
+  python3 delayController.py
+  
+  # mode=0: 全リンクに固定遅延
+  python3 delayController.py 0 10          # 全リンクに10ms
+  python3 delayController.py 0 50          # 全リンクに50ms
+  
+  # mode=0: 全リンクにランダム遅延
+  python3 delayController.py 0 10:100      # 全リンクに10-100msのランダム遅延
+  python3 delayController.py 0 5:50        # 全リンクに5-50msのランダム遅延
+  
+  # mode=1: 一部リンクに遅延設定
+  python3 delayController.py 1 1 20        # リンク1に20ms
+  python3 delayController.py 1 1,3,5 30    # リンク1,3,5に30ms
+  python3 delayController.py 1 1-5 15      # リンク1〜5に15ms
+  python3 delayController.py 1 1,3-5,7 25  # リンク1,3〜5,7に25ms
+  
+  # mode=2: 遅延削除
+  python3 delayController.py 2
+  
+  # mode=3: 遅延なし
+  python3 delayController.py 3
+        ''')
+    
+    parser.add_argument('mode', nargs='?', type=int, choices=[0, 1, 2, 3],
+                        help='動作モード: 0=全リンク, 1=一部選択, 2=削除, 3=なし')
+    
+    parser.add_argument('arg1', nargs='?', type=str,
+                        help='mode=0: 遅延値または範囲(10 or 10:100), mode=1: リンク番号(1,3-5,7)')
+    
+    parser.add_argument('arg2', nargs='?', type=str,
+                        help='mode=1: 遅延値(ms)')
+    
+    return parser.parse_args()
+
+
+def process_command_line_args(args, cluster_info: ClusterInfo) -> Tuple[int, List[Tuple[str, str]], Dict[Tuple[str, str], int]]:
+    """
+    コマンドライン引数を処理して設定を返す
+    
+    Args:
+        args: argparseの引数
+        cluster_info: ClusterInfoインスタンス
+    
+    Returns:
+        (選択タイプ, 選択されたリンクリスト, 遅延設定辞書)
+    """
+    import random
+    
+    mode = args.mode
+    
+    # mode=3: 遅延なし
+    if mode == 3:
+        return (4, [], {})
+    
+    # mode=2: 遅延削除
+    if mode == 2:
+        return (3, [], {})
+    
+    all_links = cluster_info.get_all_links()
+    
+    # mode=0: 全リンクに遅延設定
+    if mode == 0:
+        if not args.arg1:
+            print("エラー: 遅延値または範囲を指定してください (例: 10 または 10:100)")
+            sys.exit(1)
+        
+        selected_links = all_links
+        choice_type = 1
+        
+        # 遅延値の解析（固定 or ランダム）
+        if ':' in args.arg1:
+            # ランダム遅延 (例: 10:100)
+            try:
+                min_delay, max_delay = args.arg1.split(':')
+                min_delay = int(min_delay)
+                max_delay = int(max_delay)
+                
+                if min_delay > max_delay:
+                    print("エラー: 最小遅延は最大遅延以下である必要があります")
+                    sys.exit(1)
+                
+                delay_config = {}
+                for link in selected_links:
+                    delay_config[link] = random.randint(min_delay, max_delay)
+            except ValueError:
+                print(f"エラー: 無効な範囲指定: {args.arg1}")
+                sys.exit(1)
+        else:
+            # 固定遅延 (例: 10)
+            try:
+                delay_ms = int(args.arg1)
+                delay_config = {link: delay_ms for link in selected_links}
+            except ValueError:
+                print(f"エラー: 無効な遅延値: {args.arg1}")
+                sys.exit(1)
+    
+    # mode=1: 一部リンクに遅延設定
+    elif mode == 1:
+        if not args.arg1 or not args.arg2:
+            print("エラー: リンク番号と遅延値を指定してください")
+            print("例: python3 delayController.py 1 1,3-5 20")
+            sys.exit(1)
+        
+        # リンク番号をパース
+        try:
+            selected_indices = cluster_info._parse_selection(args.arg1, len(all_links))
+            selected_links = [all_links[i-1] for i in selected_indices]
+            choice_type = 2
+        except ValueError as e:
+            print(f"エラー: {e}")
+            sys.exit(1)
+        
+        # 遅延値をパース
+        try:
+            delay_ms = int(args.arg2)
+            delay_config = {link: delay_ms for link in selected_links}
+        except ValueError:
+            print(f"エラー: 無効な遅延値: {args.arg2}")
+            sys.exit(1)
+    
+    else:
+        print(f"エラー: 不明なモード: {mode}")
+        sys.exit(1)
+    
+    return (choice_type, selected_links, delay_config)
+
+
 def main():
     """メイン処理"""
+    args = parse_arguments()
     cluster_info = ClusterInfo()
     
     # コンテナ発見
@@ -654,8 +800,14 @@ def main():
         # 隣接情報表示
         cluster_info.print_adjacency_matrix()
     
-    # ユーザが遅延を設定する対象を指定
-    choice_type, selected_links, delay_config = cluster_info.prompt_delay_configuration()
+    # コマンドライン引数モード vs インタラクティブモード
+    if args.mode is not None:
+        # コマンドライン引数モード
+        choice_type, selected_links, delay_config = process_command_line_args(
+            args, cluster_info)
+    else:
+        # インタラクティブモード
+        choice_type, selected_links, delay_config = cluster_info.prompt_delay_configuration()
     
     if choice_type == 4:
         # 遅延なし
@@ -663,14 +815,8 @@ def main():
     
     if choice_type == 3:
         # 遅延削除
-        print("\n全てのクラスタから遅延設定を削除しますか？ (y/n): ", end="")
-        confirm = input().strip().lower()
-        
-        if confirm in ['y', 'yes']:
-            cluster_info.remove_delay()
-            print("\n=== 削除完了 ===")
-        else:
-            print("\n削除をキャンセルしました")
+        cluster_info.remove_delay()
+        print("\n=== 削除完了 ===")
         return
     
     # 選択されたリンクの確認
@@ -688,15 +834,8 @@ def main():
             print(f"  平均遅延: {sum(delays) / len(delays):.1f}ms")
     
     # 実際のtc設定を実行
-    print("\n遅延設定を適用しますか？ (y/n): ", end="")
-    confirm = input().strip().lower()
-    
-    if confirm in ['y', 'yes']:
-        cluster_info.apply_delay(delay_config)
-        print("\n=== 設定完了 ===")
-    else:
-        print("\n設定をキャンセルしました")
-        print("\n=== 調査完了 ===")
+    cluster_info.apply_delay(delay_config)
+    print("\n=== 設定完了 ===")
 
 if __name__ == "__main__":
     main()
