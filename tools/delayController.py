@@ -430,7 +430,7 @@ class ClusterInfo:
     
     def apply_delay(self, delay_config: Dict[Tuple[str, str], int]) -> bool:
         """
-        tcコマンドを使用してリンクに遅延を設定
+        tcコマンドを使用してリンクに遅延を設定（片方向のみ）
         
         Args:
             delay_config: {(src_id, dst_id): delay_ms} の辞書
@@ -439,18 +439,19 @@ class ClusterInfo:
             成功した場合True
         """
         print("\n=== 遅延設定の適用 ===")
+        print("注: 片方向のみに遅延を設定します")
         
         success_count = 0
         fail_count = 0
         
         for (src_id, dst_id), delay_ms in delay_config.items():
-            # 双方向に設定
-            if self._apply_delay_single_direction(src_id, dst_id, delay_ms):
-                success_count += 1
+            # 片方向のみに設定（小さいIDから大きいIDへの方向）
+            if int(src_id) < int(dst_id):
+                direction_src, direction_dst = src_id, dst_id
             else:
-                fail_count += 1
+                direction_src, direction_dst = dst_id, src_id
             
-            if self._apply_delay_single_direction(dst_id, src_id, delay_ms):
+            if self._apply_delay_single_direction(direction_src, direction_dst, delay_ms):
                 success_count += 1
             else:
                 fail_count += 1
@@ -488,7 +489,7 @@ class ClusterInfo:
         try:
             # tcコマンドが利用可能か確認
             check_result = subprocess.run(
-                ['docker', 'exec', container, 'sh', '-c', 'command -v tc'],
+                ['docker', 'exec', '--privileged', container, 'sh', '-c', 'command -v tc'],
                 capture_output=True,
                 text=True
             )
@@ -499,7 +500,7 @@ class ClusterInfo:
             
             # 1. qdisc設定を確認し、必要に応じて初期化
             check_qdisc = subprocess.run(
-                ['docker', 'exec', container, 'tc', 'qdisc', 'show', 'dev', interface],
+                ['docker', 'exec', '--privileged', container, 'tc', 'qdisc', 'show', 'dev', interface],
                 capture_output=True,
                 text=True
             )
@@ -507,7 +508,7 @@ class ClusterInfo:
             # prioがなければ追加
             if 'prio' not in check_qdisc.stdout:
                 subprocess.run(
-                    ['docker', 'exec', container, 'tc', 'qdisc', 'add', 'dev', interface,
+                    ['docker', 'exec', '--privileged', container, 'tc', 'qdisc', 'add', 'dev', interface,
                      'root', 'handle', '1:', 'prio', 'bands', '3'],
                     check=True,
                     capture_output=True
@@ -516,7 +517,7 @@ class ClusterInfo:
             
             # 2. netem qdiscを設定
             subprocess.run(
-                ['docker', 'exec', container, 'tc', 'qdisc', 'replace', 'dev', interface,
+                ['docker', 'exec', '--privileged', container, 'tc', 'qdisc', 'replace', 'dev', interface,
                  'parent', '1:3', 'handle', '30:', 'netem', 'delay', f'{delay_ms}ms'],
                 check=True,
                 capture_output=True
@@ -524,7 +525,7 @@ class ClusterInfo:
             
             # 3. u32フィルタで宛先IPに応じてトラフィックを振り分け
             subprocess.run(
-                ['docker', 'exec', container, 'tc', 'filter', 'add', 'dev', interface,
+                ['docker', 'exec', '--privileged', container, 'tc', 'filter', 'add', 'dev', interface,
                  'protocol', 'ip', 'parent', '1:0', 'prio', '1', 'u32',
                  'match', 'ip', 'dst', f'{dst_ip}/32', 'flowid', '1:3'],
                 check=True,
@@ -584,7 +585,7 @@ class ClusterInfo:
         try:
             # tcコマンドが利用可能か確認
             check_result = subprocess.run(
-                ['docker', 'exec', container, 'sh', '-c', 'command -v tc'],
+                ['docker', 'exec', '--privileged', container, 'sh', '-c', 'command -v tc'],
                 capture_output=True,
                 text=True
             )
@@ -595,7 +596,7 @@ class ClusterInfo:
             
             # qdisc設定を確認
             check_qdisc = subprocess.run(
-                ['docker', 'exec', container, 'tc', 'qdisc', 'show', 'dev', interface],
+                ['docker', 'exec', '--privileged', container, 'tc', 'qdisc', 'show', 'dev', interface],
                 capture_output=True,
                 text=True
             )
@@ -607,7 +608,7 @@ class ClusterInfo:
             
             # root qdiscを削除(全てのフィルタとネストされたqdiscも削除される)
             subprocess.run(
-                ['docker', 'exec', container, 'tc', 'qdisc', 'del', 'dev', interface, 'root'],
+                ['docker', 'exec', '--privileged', container, 'tc', 'qdisc', 'del', 'dev', interface, 'root'],
                 check=True,
                 capture_output=True
             )
