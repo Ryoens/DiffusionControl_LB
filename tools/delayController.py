@@ -25,6 +25,7 @@ class ClusterInfo:
         self.ip_map: Dict[str, str] = {}  # {cluster_id: ip_address}
         self.adjacency: Dict[str, Set[str]] = {}  # {cluster_id: set(adjacent_ids)}
         self.adjacency_ips: Dict[str, Dict[str, str]] = {}  # {cluster_id: {adjacent_id: ip}}
+        self.current_delays: Dict[Tuple[str, str], int] = {}  # {(src_id, dst_id): delay_ms}
     
     def discover_containers(self) -> bool:
         """Cluster*_LB パターンのコンテナを発見"""
@@ -134,22 +135,32 @@ class ClusterInfo:
             return False
     
     def _print_adjacency_matrix(self, cluster_ids: List[str]):
-        """隣接情報を行列形式で出力"""
+        """隣接情報を行列形式で出力（遅延情報付き）"""
         # ヘッダー行
-        header = "    " + " ".join([f"{cid:>3}" for cid in cluster_ids])
+        header = "    " + " ".join([f"{cid:>4}" for cid in cluster_ids])
         print(header)
-        print("    " + "-" * (4 * len(cluster_ids)))
+        print("    " + "-" * (5 * len(cluster_ids)))
         
         # 各行
         for src_id in cluster_ids:
             row = f"{src_id:>3} |"
             for dst_id in cluster_ids:
                 if src_id == dst_id:
-                    row += "  - "
+                    row += "   - "
                 elif dst_id in self.adjacency.get(src_id, set()):
-                    row += "  O "
+                    # 片方向の遅延を表示（小さいIDから大きいIDへ）
+                    if int(src_id) < int(dst_id):
+                        link_key = (src_id, dst_id)
+                    else:
+                        link_key = (dst_id, src_id)
+                    
+                    delay = self.current_delays.get(link_key, 0)
+                    if delay > 0:
+                        row += f"{delay:>4} "
+                    else:
+                        row += "   O "
                 else:
-                    row += "  . "
+                    row += "   . "
             print(row)
     
     def print_container_info(self):
@@ -178,7 +189,6 @@ class ClusterInfo:
     
     def print_adjacency_matrix(self):
         """隣接情報を行列形式で表示"""
-        print("\n=== 隣接クラスタ情報（行列形式） ===")
         cluster_ids = sorted(self.adjacency.keys(), key=int)
         self._print_adjacency_matrix(cluster_ids)
     
@@ -454,6 +464,8 @@ class ClusterInfo:
             
             if self._apply_delay_single_direction(direction_src, direction_dst, delay_ms):
                 success_count += 1
+                # 成功した場合、current_delaysを更新
+                self.current_delays[(direction_src, direction_dst)] = delay_ms
             else:
                 fail_count += 1
         
@@ -562,6 +574,10 @@ class ClusterInfo:
                 success_count += 1
             else:
                 fail_count += 1
+        
+        # 削除成功時はcurrent_delaysをクリア
+        if fail_count == 0:
+            self.current_delays.clear()
         
         print(f"\n削除完了: 成功 {success_count}, 失敗 {fail_count}")
         return fail_count == 0
@@ -798,6 +814,7 @@ def main():
     # 隣接情報読み込み
     if cluster_info.load_adjacency_info():
         # 隣接情報表示
+        print("\n=== 隣接クラスタ情報（行列形式: 接続状況） ===")
         cluster_info.print_adjacency_matrix()
     
     # コマンドライン引数モード vs インタラクティブモード
@@ -835,6 +852,11 @@ def main():
     
     # 実際のtc設定を実行
     cluster_info.apply_delay(delay_config)
+    
+    # 遅延設定後の行列を表示
+    print("\n=== 隣接クラスタ情報（行列形式: 設定後） ===")
+    cluster_info.print_adjacency_matrix()
+    
     print("\n=== 設定完了 ===")
 
 if __name__ == "__main__":
