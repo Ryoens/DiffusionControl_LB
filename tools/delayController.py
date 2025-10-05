@@ -675,11 +675,15 @@ def parse_arguments():
   python3 delayController.py 0 10:100      # 全リンクに10-100msのランダム遅延
   python3 delayController.py 0 5:50        # 全リンクに5-50msのランダム遅延
   
-  # mode=1: 一部リンクに遅延設定
+  # mode=1: 一部リンクに遅延設定（単一設定）
   python3 delayController.py 1 1 20        # リンク1に20ms
   python3 delayController.py 1 1,3,5 30    # リンク1,3,5に30ms
   python3 delayController.py 1 1-5 15      # リンク1〜5に15ms
   python3 delayController.py 1 1,3-5,7 25  # リンク1,3〜5,7に25ms
+  
+  # mode=1: 一部リンクに遅延設定（複数設定）
+  python3 delayController.py 1 1=10 2-3=20 4=5:50      # リンク1に10ms、リンク2-3に20ms、リンク4に5-50msランダム
+  python3 delayController.py 1 1,3=15 2=10:100         # リンク1,3に15ms、リンク2に10-100msランダム
   
   # mode=2: 遅延削除
   python3 delayController.py 2
@@ -691,11 +695,8 @@ def parse_arguments():
     parser.add_argument('mode', nargs='?', type=int, choices=[0, 1, 2, 3],
                         help='動作モード: 0=全リンク, 1=一部選択, 2=削除, 3=なし')
     
-    parser.add_argument('arg1', nargs='?', type=str,
-                        help='mode=0: 遅延値または範囲(10 or 10:100), mode=1: リンク番号(1,3-5,7)')
-    
-    parser.add_argument('arg2', nargs='?', type=str,
-                        help='mode=1: 遅延値(ms)')
+    parser.add_argument('args', nargs='*', type=str,
+                        help='mode=0: 遅延値または範囲(10 or 10:100), mode=1: リンク=遅延のペア(1=10 2-3=20 4=5:50)')
     
     return parser.parse_args()
 
@@ -727,18 +728,20 @@ def process_command_line_args(args, cluster_info: ClusterInfo) -> Tuple[int, Lis
     
     # mode=0: 全リンクに遅延設定
     if mode == 0:
-        if not args.arg1:
+        if not args.args or len(args.args) == 0:
             print("エラー: 遅延値または範囲を指定してください (例: 10 または 10:100)")
             sys.exit(1)
         
         selected_links = all_links
         choice_type = 1
         
+        delay_spec = args.args[0]
+        
         # 遅延値の解析（固定 or ランダム）
-        if ':' in args.arg1:
+        if ':' in delay_spec:
             # ランダム遅延 (例: 10:100)
             try:
-                min_delay, max_delay = args.arg1.split(':')
+                min_delay, max_delay = delay_spec.split(':')
                 min_delay = int(min_delay)
                 max_delay = int(max_delay)
                 
@@ -750,40 +753,97 @@ def process_command_line_args(args, cluster_info: ClusterInfo) -> Tuple[int, Lis
                 for link in selected_links:
                     delay_config[link] = random.randint(min_delay, max_delay)
             except ValueError:
-                print(f"エラー: 無効な範囲指定: {args.arg1}")
+                print(f"エラー: 無効な範囲指定: {delay_spec}")
                 sys.exit(1)
         else:
             # 固定遅延 (例: 10)
             try:
-                delay_ms = int(args.arg1)
+                delay_ms = int(delay_spec)
                 delay_config = {link: delay_ms for link in selected_links}
             except ValueError:
-                print(f"エラー: 無効な遅延値: {args.arg1}")
+                print(f"エラー: 無効な遅延値: {delay_spec}")
                 sys.exit(1)
     
     # mode=1: 一部リンクに遅延設定
     elif mode == 1:
-        if not args.arg1 or not args.arg2:
-            print("エラー: リンク番号と遅延値を指定してください")
-            print("例: python3 delayController.py 1 1,3-5 20")
+        if not args.args or len(args.args) == 0:
+            print("エラー: リンク指定を行ってください")
+            print("例1: python3 delayController.py 1 1,3-5 20        # 従来の形式")
+            print("例2: python3 delayController.py 1 1=10 2-3=20    # 複数設定形式")
             sys.exit(1)
         
-        # リンク番号をパース
-        try:
-            selected_indices = cluster_info._parse_selection(args.arg1, len(all_links))
-            selected_links = [all_links[i-1] for i in selected_indices]
+        delay_config = {}
+        selected_links = []
+        
+        # 新形式（リンク=遅延）か従来形式かを判定
+        if '=' in args.args[0]:
+            # 新形式: 複数のリンク=遅延ペア
             choice_type = 2
-        except ValueError as e:
-            print(f"エラー: {e}")
-            sys.exit(1)
+            
+            for spec in args.args:
+                if '=' not in spec:
+                    print(f"エラー: 無効な形式: {spec} (リンク=遅延の形式で指定してください)")
+                    sys.exit(1)
+                
+                try:
+                    links_part, delay_part = spec.split('=', 1)
+                    
+                    # リンク番号をパース
+                    link_indices = cluster_info._parse_selection(links_part, len(all_links))
+                    current_links = [all_links[i-1] for i in link_indices]
+                    
+                    # 遅延値をパース（固定 or ランダム）
+                    if ':' in delay_part:
+                        # ランダム遅延
+                        min_delay, max_delay = delay_part.split(':')
+                        min_delay = int(min_delay)
+                        max_delay = int(max_delay)
+                        
+                        if min_delay > max_delay:
+                            print("エラー: 最小遅延は最大遅延以下である必要があります")
+                            sys.exit(1)
+                        
+                        for link in current_links:
+                            delay_config[link] = random.randint(min_delay, max_delay)
+                    else:
+                        # 固定遅延
+                        delay_ms = int(delay_part)
+                        for link in current_links:
+                            delay_config[link] = delay_ms
+                    
+                    selected_links.extend(current_links)
+                    
+                except ValueError as e:
+                    print(f"エラー: {spec} の解析に失敗: {e}")
+                    sys.exit(1)
+            
+            # 重複を削除
+            selected_links = list(dict.fromkeys(selected_links))
         
-        # 遅延値をパース
-        try:
-            delay_ms = int(args.arg2)
-            delay_config = {link: delay_ms for link in selected_links}
-        except ValueError:
-            print(f"エラー: 無効な遅延値: {args.arg2}")
-            sys.exit(1)
+        else:
+            # 従来形式: リンク番号と遅延値
+            if len(args.args) < 2:
+                print("エラー: リンク番号と遅延値を指定してください")
+                print("例: python3 delayController.py 1 1,3-5 20")
+                sys.exit(1)
+            
+            choice_type = 2
+            
+            # リンク番号をパース
+            try:
+                selected_indices = cluster_info._parse_selection(args.args[0], len(all_links))
+                selected_links = [all_links[i-1] for i in selected_indices]
+            except ValueError as e:
+                print(f"エラー: {e}")
+                sys.exit(1)
+            
+            # 遅延値をパース
+            try:
+                delay_ms = int(args.args[1])
+                delay_config = {link: delay_ms for link in selected_links}
+            except ValueError:
+                print(f"エラー: 無効な遅延値: {args.args[1]}")
+                sys.exit(1)
     
     else:
         print(f"エラー: 不明なモード: {mode}")
