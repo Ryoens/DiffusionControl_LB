@@ -681,9 +681,10 @@ def parse_arguments():
   python3 delayController.py 1 1-5 15      # リンク1〜5に15ms
   python3 delayController.py 1 1,3-5,7 25  # リンク1,3〜5,7に25ms
   
-  # mode=1: 一部リンクに遅延設定（複数設定）
-  python3 delayController.py 1 1=10 2-3=20 4=5:50      # リンク1に10ms、リンク2-3に20ms、リンク4に5-50msランダム
-  python3 delayController.py 1 1,3=15 2=10:100         # リンク1,3に15ms、リンク2に10-100msランダム
+  # mode=1: 特定リンクとその他に遅延設定（複数設定）
+  python3 delayController.py 1 3=10 other=1:5       # リンク3に10ms、その他に1-5msランダム
+  python3 delayController.py 1 1,3=20 other=5:50    # リンク1,3に20ms、その他に5-50msランダム
+  python3 delayController.py 1 1-3=100 other=10     # リンク1-3に100ms、その他に10ms
   
   # mode=2: 遅延削除
   python3 delayController.py 2
@@ -768,57 +769,91 @@ def process_command_line_args(args, cluster_info: ClusterInfo) -> Tuple[int, Lis
     elif mode == 1:
         if not args.args or len(args.args) == 0:
             print("エラー: リンク指定を行ってください")
-            print("例1: python3 delayController.py 1 1,3-5 20        # 従来の形式")
-            print("例2: python3 delayController.py 1 1=10 2-3=20    # 複数設定形式")
+            print("例1: python3 delayController.py 1 1,3-5 20           # 従来の形式")
+            print("例2: python3 delayController.py 1 3=10 other=1:5     # 複数形式")
             sys.exit(1)
         
         delay_config = {}
         selected_links = []
         
-        # 新形式（リンク=遅延）か従来形式かを判定
+        # 複数形式かどうかを判定（'='が含まれるか）
         if '=' in args.args[0]:
-            # 新形式: 複数のリンク=遅延ペア
+            # 複数形式: 特定リンク=遅延 other=遅延
             choice_type = 2
             
-            for spec in args.args:
-                if '=' not in spec:
-                    print(f"エラー: 無効な形式: {spec} (リンク=遅延の形式で指定してください)")
-                    sys.exit(1)
-                
-                try:
-                    links_part, delay_part = spec.split('=', 1)
-                    
-                    # リンク番号をパース
-                    link_indices = cluster_info._parse_selection(links_part, len(all_links))
-                    current_links = [all_links[i-1] for i in link_indices]
-                    
-                    # 遅延値をパース（固定 or ランダム）
-                    if ':' in delay_part:
-                        # ランダム遅延
-                        min_delay, max_delay = delay_part.split(':')
-                        min_delay = int(min_delay)
-                        max_delay = int(max_delay)
-                        
-                        if min_delay > max_delay:
-                            print("エラー: 最小遅延は最大遅延以下である必要があります")
-                            sys.exit(1)
-                        
-                        for link in current_links:
-                            delay_config[link] = random.randint(min_delay, max_delay)
-                    else:
-                        # 固定遅延
-                        delay_ms = int(delay_part)
-                        for link in current_links:
-                            delay_config[link] = delay_ms
-                    
-                    selected_links.extend(current_links)
-                    
-                except ValueError as e:
-                    print(f"エラー: {spec} の解析に失敗: {e}")
-                    sys.exit(1)
+            if len(args.args) != 2:
+                print("エラー: 複数形式は2つの引数が必要です")
+                print("例: python3 delayController.py 1 3=10 other=1:5")
+                sys.exit(1)
             
-            # 重複を削除
-            selected_links = list(dict.fromkeys(selected_links))
+            # 1つ目: 特定リンクの設定
+            first_spec = args.args[0]
+            # 2つ目: その他のリンクの設定
+            second_spec = args.args[1]
+            
+            if not second_spec.startswith('other='):
+                print("エラー: 2番目の引数は 'other=遅延' の形式で指定してください")
+                print("例: python3 delayController.py 1 3=10 other=1:5")
+                sys.exit(1)
+            
+            try:
+                # 特定リンクの解析
+                links_part, delay_part = first_spec.split('=', 1)
+                
+                # リンク番号をパース
+                specific_indices = cluster_info._parse_selection(links_part, len(all_links))
+                specific_links = [all_links[i-1] for i in specific_indices]
+                
+                # 遅延値をパース（固定 or ランダム）
+                if ':' in delay_part:
+                    # ランダム遅延
+                    min_delay, max_delay = delay_part.split(':')
+                    min_delay = int(min_delay)
+                    max_delay = int(max_delay)
+                    
+                    if min_delay > max_delay:
+                        print("エラー: 最小遅延は最大遅延以下である必要があります")
+                        sys.exit(1)
+                    
+                    for link in specific_links:
+                        delay_config[link] = random.randint(min_delay, max_delay)
+                else:
+                    # 固定遅延
+                    delay_ms = int(delay_part)
+                    for link in specific_links:
+                        delay_config[link] = delay_ms
+                
+                # その他のリンクの解析
+                other_delay_part = second_spec.split('=', 1)[1]
+                
+                # その他のリンク（全リンクから特定リンクを除外）
+                other_links = [link for link in all_links if link not in specific_links]
+                
+                # その他の遅延値をパース
+                if ':' in other_delay_part:
+                    # ランダム遅延
+                    min_delay, max_delay = other_delay_part.split(':')
+                    min_delay = int(min_delay)
+                    max_delay = int(max_delay)
+                    
+                    if min_delay > max_delay:
+                        print("エラー: 最小遅延は最大遅延以下である必要があります")
+                        sys.exit(1)
+                    
+                    for link in other_links:
+                        delay_config[link] = random.randint(min_delay, max_delay)
+                else:
+                    # 固定遅延
+                    delay_ms = int(other_delay_part)
+                    for link in other_links:
+                        delay_config[link] = delay_ms
+                
+                # 全リンクを選択リストに追加
+                selected_links = all_links
+                
+            except ValueError as e:
+                print(f"エラー: 引数の解析に失敗: {e}")
+                sys.exit(1)
         
         else:
             # 従来形式: リンク番号と遅延値
