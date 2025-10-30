@@ -8,5 +8,7 @@ destroy:
 	@cd cmd && ./DockerDestroy.sh $(ARG)
 exec:
 	@cd cmd && ./Execute.sh
+web:
+	@cd cmd && ./ExecuteWebUI.sh
 %:
 	@:
