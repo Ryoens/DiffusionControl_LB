@@ -16,8 +16,6 @@
   "cluster1": {
     "adjacentList": {
       "cluster0": "172.18.4.2",
-      "cluster2": "172.18.4.4",
-      "cluster3": "172.18.4.5",
       "cluster4": "172.18.4.6"
     },
     "internalList": {
@@ -30,8 +28,6 @@
   "cluster2": {
     "adjacentList": {
       "cluster0": "172.18.4.2",
-      "cluster1": "172.18.4.3",
-      "cluster3": "172.18.4.5",
       "cluster4": "172.18.4.6"
     },
     "internalList": {
@@ -43,10 +39,7 @@
   },
   "cluster3": {
     "adjacentList": {
-      "cluster0": "172.18.4.2",
-      "cluster1": "172.18.4.3",
-      "cluster2": "172.18.4.4",
-      "cluster4": "172.18.4.6"
+      "cluster0": "172.18.4.2"
     },
     "internalList": {
       "cluster_lb": "172.18.4.5",
@@ -59,8 +52,7 @@
     "adjacentList": {
       "cluster0": "172.18.4.2",
       "cluster1": "172.18.4.3",
-      "cluster2": "172.18.4.4",
-      "cluster3": "172.18.4.5"
+      "cluster2": "172.18.4.4"
     },
     "internalList": {
       "cluster_lb": "172.18.4.6",
