@@ -8,7 +8,7 @@ run_experiment() {
   local attempt_count=1
 
   local dirname="${compiled_file}_t${threshold}_k${safe_kappa}_vus${vus}"
-  local data_dir="../../data/implement/${dirname}"
+  local data_dir="../data/implement/${dirname}"
   mkdir -p "$data_dir"
 
   echo "Running experiment with threshold=$threshold, kappa=$kappa"
@@ -17,13 +17,13 @@ run_experiment() {
     echo "Attempt $attempt_count"
     count=0
 
-    # LB 実行
+    # LB execution
     for count in $(seq 0 "$KEY"); do
       docker exec -d Cluster${count}_LB compiled/$compiled_file $cluster -t $feedback -q $threshold -k $kappa
       docker exec Cluster${count}_LB ps aux
     done
 
-    # Redisキーの待機
+    # wait for Redis keys
     while true; do
       key_list=$(docker exec -i redis-server redis-cli --raw keys 'lb_ready:*')
       key_count=$(echo "$key_list" | tr ' ' '\n' | grep -c '^lb_ready:')
@@ -34,36 +34,36 @@ run_experiment() {
       sleep 1
     done
 
-    # JMeter 実行
+    # JMeter execution
     ./../tools/jmeter_multi.sh $url $time $vus $KEY
     wait
     echo "All tests completed."
 
-    # データ取得
+    # data acquisition
     for num in $(seq 2 $((KEY + 2))); do 
       i=$((num - 2))
       timestamp=$(date +"%Y%m%d_%H%M%S")
       curl -X GET "172.18.4.${num}:8002" -o "${data_dir}/Cluster${i}_${attempt_count}_${timestamp}.csv"
     done
 
-    # JMeterログ移動
+    # move JMeter logs
     timestamp=$(date +"%Y%m%d_%H%M%S")
     rm -f ../log/output.csv temp_test.jmx
     mv ../log/jmeter.log "${data_dir}/jmeter_${attempt_count}_${timestamp}.log"
     mv ../log/result_60s.jtl "${data_dir}/jmeter_result${time}s_${attempt_count}_${timestamp}.jtl"
 
-    # Redis初期化
+    # initialize redis keys
     docker exec -it redis-server redis-cli flushall
     attempt_count=$((attempt_count + 1))
     sleep 5
   done
 
-  # 結果整形
+  # data formatting
   python3 ../tools/to_average.py $data_dir $KEY
   python3 ../tools/to_median.py $data_dir $KEY
   ./../tools/jmeter_scrayping.sh $data_dir $attempt
 
-  # パラメータ記録
+  # write parameters and other information to a file
   timestamp=$(date +"%Y%m%d_%H%M%S")
   {
     echo "Experiment in these parameters is finished"
@@ -81,8 +81,9 @@ count=0
 attempt_count=1
 time=60
 source ~/.bashrc
+mkdir -p ../log ../compiled ../data
 
-# 各パラメータの入力
+# input each parameters
 read -p "feedback [ms]: " feedback 
 read -p "threshold [int: start, end, step]: " threshold_input
 read -p "kappa [float: start, end, step]: " kappa_input
@@ -92,7 +93,7 @@ read -p "NW model [f: fullmesh, r: random, ba: balabasi and albert]: " nw_model
 read -p "Number of Clusters to reduce Web Servers: " num_cluster
 echo "-------- parameter OK --------"
 
-# webサーバ数の指定
+# set number of web servers
 if [[ $num_cluster -eq 0 ]]; then
   echo "default start"
 elif [[ $num_cluster -eq 1 ]]; then
@@ -109,7 +110,7 @@ else
 fi
 echo ${cls[@]} ${web[@]}
 
-# フラッシュクラウド対象サーバの指定
+# set target server for flash crowds
 container=$(docker ps --filter "name=_LB" --format "{{.Names}}" | head -n 1)
 echo $container
 KEY=$(echo "$container" | sed -E 's/^Cluster([0-9]+)_LB$/\1/')
@@ -125,7 +126,7 @@ ip_last=$((2 + cluster))
 url="http://172.18.4.${ip_last}:8001"
 echo "Target URL: $url"
 
-# 配列展開
+# parse threshold and kappa inputs
 threshold_parts=($threshold_input)
 
 if [[ ${#threshold_parts[@]} -eq 1 ]]; then
@@ -145,9 +146,8 @@ else
 fi
 
 echo $threshold_values $kappa_values
-# exit 1
 
-# 対象ファイルの指定
+# set target file to apply
 flag=0
 if [[ ${#kappa_values[@]} -gt 1 ]]; then
   apply_file="lb_diff.go"
@@ -171,13 +171,13 @@ fi
 compiled_file="${apply_file%.go}"
 echo $apply_file $compiled_file
 
-# 隣接リストの作成
+# create adjacency list
 python3 ../tools/adjacentListController.py $nw_model ${cls[@]} ${web[@]}
 echo "Created adjacentList per cluster"
 
 count=0
 
-# nameserverの設定, build
+# set nameserver, build
 for count in $(seq 0 "$KEY");
 do 
     echo "== Cluster${count}_LB =="

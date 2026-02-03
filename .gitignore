@@ -2,3 +2,5 @@
 compiled
 json
 log
+data
+cmd/cluster*

@@ -3,13 +3,14 @@ count=0
 attempt_count=1
 time=60
 source ~/.bashrc
+mkdir -p ../log ../compiled ../data
 
-# 各パラメータの入力
+# input each parameters
 read -p "feedback [ms]: " feedback 
 read -p "threshold [0:100]: " threshold
 read -p "kappa [float]: " kappa
 
-# 小数点をアンダーバーに置換
+# replace decimal point with underscore
 safe_kappa=$(echo "$kappa" | sed 's/\./_/g')
 echo $feedback $threshold $kappa $safe_kappa
 
@@ -21,12 +22,12 @@ echo $vus $attempt
 
 echo "-------- request OK --------"
 
-# NWモデルの指定
+# set NW model
 read -p "NW model [f: fullmesh, r: random, ba: balabasi and albert]: " nw_model
 echo $nw_model
 echo "-------- NW model OK --------"
 
-# webサーバ数の指定
+# set number of web servers
 read -p "Number of Clusters to reduce Web Servers: " num_cluster
 
 if [[ $num_cluster -eq 0 ]]; then
@@ -46,11 +47,11 @@ fi
 
 echo ${cls[@]} ${web[@]}
 
-# 隣接リストの作成
+# create adjacency list
 python3 ../tools/adjacentListController.py $nw_model ${cls[@]} ${web[@]}
 echo "Created adjacentList per cluster"
 
-# クラスタ数をコンテナ数から取得
+# get number of clusters from container count
 container=$(docker ps --filter "name=_LB" --format "{{.Names}}" | head -n 1)
 # KEY=${container:7:1}
 KEY=$(echo "$container" | sed -E 's/^Cluster([0-9]+)_LB$/\1/')
@@ -68,7 +69,7 @@ echo "Target URL: $url"
 
 echo "-------- URL OK --------"
 
-# 対象ファイルの指定
+# set target file to apply
 read -p "file to apply [t: DC(threshold), d: DC(diff), r: RR, l: LC]: " file
 case "$file" in
   t)
@@ -93,15 +94,15 @@ compiled_file="${apply_file%.go}"
 
 echo $apply_file $compiled_file
 
-# 計測結果の保存用ディレクトリ作成
+# create directory for saving measurement results
 dirname="${compiled_file}_t${feedback}_t${threshold}_k${safe_kappa}_vus${vus}"
-data_dir="../../data/implement/${dirname}"
+data_dir="../data/implement/${dirname}"
 mkdir -p "$data_dir"
 
 echo $dirname $data_dir
 count=0
 
-# nameserverの設定, build
+# set nameserver, build
 for count in $(seq 0 "$KEY");
 do 
     docker exec Cluster${count}_LB sh -c 'echo "nameserver 8.8.8.8" > /etc/resolv.conf'
@@ -143,11 +144,7 @@ do
       sleep 1
     done
 
-    # 実験データの取得
-    # --------------------------
-    ## 負荷テスト(apache bench, apache jmeter, curl, wrk, etc...)
-
-    # apache jmeterによる負荷テスト
+    # load test using apache jmeter
     ./../tools/jmeter_multi.sh $url $time $vus $KEY
     wait
     echo "All tests completed."
@@ -155,29 +152,30 @@ do
     echo $count
     for num in $(seq 2 $((count + 2)))
     do 
-        i=$((num - 2)) # cluster 5台: i=0:4
+        i=$((num - 2)) 
         echo "Cluster$i" 
         timestamp=$(date +"%Y%m%d_%H%M%S")
-        # 現在のディレクトリとは離れたところにデータを残す
+        # Save data in a directory separate from the current directory
         curl -X GET 172.18.4.$num:8002 -o "${data_dir}/Cluster$i"_"$attempt_count"_"$timestamp.csv"
     done
 
-    # 計測結果ファイルの移動
+    # move measurement result files
     timestamp=$(date +"%Y%m%d_%H%M%S")
     rm -f ../log/output.csv temp_test.jmx
     mv ../log/jmeter.log "${data_dir}/jmeter_${attempt_count}_${timestamp}.log"
     mv ../log/result_60s.jtl "${data_dir}/jmeter_result${time}s_${attempt_count}_${timestamp}.jtl"
 
-    docker exec -it redis-server redis-cli flushall # rediskeyの初期化
+    # initialize redis keys
+    docker exec -it redis-server redis-cli flushall 
     attempt_count=`expr $attempt_count + 1`
     sleep 5
 done
 
-# データの整形
+# data formatting
 python3 ../tools/to_average.py $data_dir $KEY
 python3 ../tools/to_median.py $data_dir $KEY
 
-# パラメータなどをファイルに書き出し
+# write parameters and other information to a file
 timestamp=$(date +"%Y%m%d_%H%M%S")
 {
 echo "Experiment in these parameters is finished"

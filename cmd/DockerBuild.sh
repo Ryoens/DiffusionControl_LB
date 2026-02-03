@@ -37,6 +37,7 @@ function json_output () {
 
 KEY=0
 JSON_FILE="../json/config.json"
+mkdir -p ../json
 QTY_CLUSTER=$(($1))
 
 read -p "Default Web Servers: " WEB_COUNT 
@@ -48,6 +49,7 @@ cd ..
 path=$(pwd)
 cd cmd
 
+# build lb image if not exists
 if [ "$image_exists" -eq 0 ]; then
 	echo "make image lb"
 	docker image build ./ -t lb:latest
@@ -78,7 +80,7 @@ echo "{" > $JSON_FILE
 
 while [ $KEY -le $QTY_CLUSTER ]
 do
-    echo "クラスタ$KEY のdocker-compose.ymlを生成中..."
+    echo "generate cluster $KEY docker-compose.yml..."
 
     mkdir -p ./cluster$KEY
     chmod 777 ./cluster$KEY
@@ -157,13 +159,13 @@ docker network connect overlay-net redis-server
 # docker network connect overlay-net prometheus-federate
 # docker network connect overlay-net grafana
 
-# # prometheus.yml設定
+# # set prometheus.yml
 # pwd # ~/cmd
 # cd ../
 # BASE_PATH="prometheus"
 # FEDERATION_PATH="$BASE_PATH/federation/prometheus.yml"
 
-# # federation用のターゲットを保持
+# # store target for federation
 # FED_TARGETS=()
 
 # count=0
@@ -181,7 +183,7 @@ docker network connect overlay-net redis-server
 
 # echo ${FED_TARGETS[*]}
 
-# # federation/prometheus.yml を生成
+# # generate federation/prometheus.yml
 # mkdir -p "$(dirname "$FEDERATION_PATH")"
 # FED_TARGETS_JOINED=$(IFS=,; echo "${FED_TARGETS[*]}")
 # cat > "$FEDERATION_PATH" <<EOF
@@ -200,7 +202,7 @@ docker network connect overlay-net redis-server
 #       - targets: [ $FED_TARGETS_JOINED ]
 # EOF
 
-# echo "federation/prometheus.yml を生成"
+# echo "generate federation/prometheus.yml"
 
-# # prometheusコンテナ再起動
+# # prometheus reload
 # docker kill -s HUP prometheus-federate

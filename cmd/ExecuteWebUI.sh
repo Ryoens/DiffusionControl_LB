@@ -1,3 +1,3 @@
 #!/bin/bash
 
-echo "こんにちは."
+echo "Hello."
