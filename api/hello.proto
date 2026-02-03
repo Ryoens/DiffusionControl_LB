@@ -5,31 +5,31 @@ option go_package = ".";
 package main;
 
 service LoadBalancer {
-  // バックエンドサーバーのステータスを取得するRPC
+  // RPC to get backend server status
   rpc GetBackendStatus(BackendRequest) returns (BackendStatus);
 
-  // ストリーミングでリアルタイムの制御情報を送受信するRPC
+  // RPC to send and receive real-time control information via streaming
   rpc ControlStream(stream ControlMessage) returns (stream ControlResponse);
 }
 
-// バックエンドサーバーのステータスリクエストメッセージ
+// Backend server status request message
 message BackendRequest {
-  string server_name = 1;  // サーバ名
+  string server_name = 1;  // Server name
 }
 
-// バックエンドサーバーのステータスレスポンスメッセージ
+// Backend server status response message
 message BackendStatus {
-  bool is_healthy = 1;  // サーバーのヘルス状態
+  bool is_healthy = 1;  // Server health status
 }
 
-// 制御メッセージ（クライアント -> サーバー）
+// Control message (Client -> Server)
 message ControlMessage {
-  string command = 1;  // 実行するコマンド
-  int64 payload = 2;  // コマンドに関連するデータ
+  string command = 1;  // Command to execute
+  int64 payload = 2;  // Data related to the command
 }
 
-// 制御レスポンスメッセージ（サーバー -> クライアント）
+// Control response message (Server -> Client)
 message ControlResponse {
-  string status = 1;  // 実行ステータス
-  int64 payload = 2;    // 詳細情報
+  string status = 1;  // Execution status
+  int64 payload = 2;    // Detailed information
 }
