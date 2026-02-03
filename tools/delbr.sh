@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# Note: Use this script when communication between LBs stops
 # Get a list of all bridges starting with "br-"
 bridges=$(brctl show | awk '{print $1}' | grep '^br-')
 

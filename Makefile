@@ -1,4 +1,4 @@
-# Usage: make [タスク名] [数値]
+# Usage: make [task name] [number]
 ARG=$(filter-out $@,$(MAKECMDGOALS))-1
 build: 
 	echo $(ARG)

@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # ----------------------
-# ユーザー定義パラメータ
+# User-defined parameters
 # ----------------------
-TARGET_URL="${1:-http://localhost:8080}"     # 1番目の引数: ターゲットURL（省略時は localhost）
-DURATION_SEC="${2:-60}"                      # 2番目の引数: 負荷時間（秒）
-THREADS="${3:-50}"                           # 3番目の引数: 同時ユーザー数
+TARGET_URL="${1:-http://localhost:8080}"     # 1st argument: Target URL (default is localhost)
+DURATION_SEC="${2:-60}"                      # 2nd argument: Load duration (seconds)
+THREADS="${3:-50}"                           # 3rd argument: Number of concurrent users
 
 # ----------------------
-# jmxテンプレートの自動生成
+# Automatic generation of jmx template
 # ----------------------
 cat <<EOF > temp_test.jmx
 <?xml version="1.0" encoding="UTF-8"?>
@@ -59,7 +59,7 @@ cat <<EOF > temp_test.jmx
 EOF
 
 # ----------------------
-# JMeter テスト実行
+# Run JMeter test
 # ----------------------
 echo "Running JMeter test against $TARGET_URL for ${DURATION_SEC}s with ${THREADS} threads..."
 jmeter -n -t temp_test.jmx -l ../log/result_${DURATION_SEC}s.jtl -j ../log/jmeter.log -Jxstream.security.allow=com.thoughtworks.xstream.security.AnyTypePermission

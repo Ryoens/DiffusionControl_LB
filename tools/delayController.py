@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-delayController.py - クラスタ間リンク遅延制御ツール
+delayController.py - Cluster Link Delay Control Tool
 
-Docker コンテナ (Cluster*_LB) のネットワーク情報を収集し,
-隣接クラスタ情報を行列形式で表示します.
+Docker containers (Cluster*_LB) network information is collected,
+and adjacent cluster information is displayed in matrix form.
 """
 
 import os
@@ -16,7 +16,7 @@ from typing import Dict, List, Set, Tuple, Optional
 
 
 class ClusterInfo:
-    """クラスタ情報を管理するクラス"""
+    """Class to manage cluster information"""
     
     def __init__(self):
         self.containers: List[str] = []
@@ -28,7 +28,7 @@ class ClusterInfo:
         self.current_delays: Dict[Tuple[str, str], int] = {}  # {(src_id, dst_id): delay_ms}
     
     def discover_containers(self) -> bool:
-        """Cluster*_LB パターンのコンテナを発見"""
+        """Discover containers matching the Cluster*_LB pattern"""
         try:
             result = subprocess.run(
                 ['docker', 'ps', '--format', '{{.Names}}'],
@@ -37,7 +37,7 @@ class ClusterInfo:
                 check=True
             )
             
-            # Cluster*_LB パターンでフィルタ
+            # Filter by Cluster*_LB pattern
             pattern = re.compile(r'^Cluster\d+_LB$')
             self.containers = sorted([
                 line for line in result.stdout.strip().split('\n')
@@ -51,16 +51,16 @@ class ClusterInfo:
             return True
             
         except subprocess.CalledProcessError as e:
-            print(f"エラー: docker ps の実行に失敗しました: {e}", file=sys.stderr)
+            print(f"Error: Failed to execute docker ps: {e}", file=sys.stderr)
             return False
     
     def extract_cluster_id(self, container_name: str) -> Optional[str]:
-        """コンテナ名からクラスタIDを抽出 (Cluster0_LB -> 0)"""
+        """Extract cluster ID from container name (Cluster0_LB -> 0)"""
         match = re.match(r'Cluster(\d+)_LB', container_name)
         return match.group(1) if match else None
     
     def get_interface_info(self, container: str) -> Optional[Tuple[str, str]]:
-        """コンテナから172.x.x.xのインターフェース名とIPアドレスを取得"""
+        """Get interface name and IP address starting with 172.x.x.x from container"""
         try:
             result = subprocess.run(
                 ['docker', 'exec', container, 'ifconfig'],
@@ -73,15 +73,15 @@ class ClusterInfo:
             current_interface = None
             
             for line in lines:
-                # インターフェース名の行
+                # Interface name line
                 if line and not line.startswith(' '):
                     parts = line.split()
                     if parts:
                         current_interface = parts[0].rstrip(':')
                 
-                # inet行で172.で始まるIPを探す
+                # Search for inet line starting with 172.
                 if 'inet ' in line and '172.' in line:
-                    # 古い形式: inet addr:172.18.4.2 または 新しい形式: inet 172.18.4.2
+                    # Old format: inet addr:172.18.4.2 or New format: inet 172.18.4.2
                     match = re.search(r'inet (?:addr:)?(\d+\.\d+\.\d+\.\d+)', line)
                     if match:
                         ip = match.group(1)
@@ -94,7 +94,7 @@ class ClusterInfo:
             return None
     
     def collect_network_info(self):
-        """各コンテナのネットワーク情報を収集"""
+        """Collect network information of each container"""
         for container in self.containers:
             cluster_id = self.extract_cluster_id(container)
             if not cluster_id:
@@ -107,16 +107,16 @@ class ClusterInfo:
                 self.ip_map[cluster_id] = ip_address
     
     def load_adjacency_info(self, json_path: str = "../json/adjacentList.json") -> bool:
-        """adjacentList.jsonから隣接情報を読み込み"""
+        """Load adjacency information from adjacentList.json"""
         if not os.path.exists(json_path):
-            print(f"エラー: {json_path} が見つかりません")
+            print(f"Error: {json_path} not found")
             return False
         
         try:
             with open(json_path, 'r') as f:
                 data = json.load(f)
             
-            # 隣接情報を構築
+            # Build adjacency information
             for cluster_name in sorted(data.keys()):
                 cluster_id = cluster_name.replace('cluster', '')
                 self.adjacency[cluster_id] = set()
@@ -131,24 +131,24 @@ class ClusterInfo:
             return True
             
         except Exception as e:
-            print(f"エラー: {e}", file=sys.stderr)
+            print(f"Error: {e}", file=sys.stderr)
             return False
     
     def _print_adjacency_matrix(self, cluster_ids: List[str]):
-        """隣接情報を行列形式で出力（遅延情報付き）"""
-        # ヘッダー行
+        """Print adjacency information in matrix form (with delay information)"""
+        # Header row
         header = "    " + " ".join([f"{cid:>4}" for cid in cluster_ids])
         print(header)
         print("    " + "-" * (5 * len(cluster_ids)))
         
-        # 各行
+        # Each row
         for src_id in cluster_ids:
             row = f"{src_id:>3} |"
             for dst_id in cluster_ids:
                 if src_id == dst_id:
                     row += "   - "
                 elif dst_id in self.adjacency.get(src_id, set()):
-                    # 片方向の遅延を表示（小さいIDから大きいIDへ）
+                    # Display one-way delay (from smaller ID to larger ID)
                     if int(src_id) < int(dst_id):
                         link_key = (src_id, dst_id)
                     else:
@@ -164,42 +164,42 @@ class ClusterInfo:
             print(row)
     
     def print_container_info(self):
-        """コンテナ情報を表示"""
-        print("=== Cluster LB コンテナの確認 ===")
+        """Print container information"""
+        print("=== Checking Cluster LB containers ===")
         if not self.containers:
-            print("Cluster*_LB パターンのコンテナが見つかりませんでした.")
+            print("No containers matching the Cluster*_LB pattern were found.")
             return
         
-        print("発見されたCluster LBコンテナ:")
+        print("Discovered Cluster LB containers:")
         for container in self.containers:
             print(f"  {container}")
-        print(f"発見されたクラスタ数: {self.cluster_count}")
+        print(f"Number of discovered clusters: {self.cluster_count}")
     
     def print_network_info(self):
-        """ネットワーク情報を表示"""
-        print("\n=== クラスタ間ネットワーク情報 ===")
+        """Print network information"""
+        print("\n=== Inter-cluster network information ===")
         for cluster_id in sorted(self.ip_map.keys(), key=int):
             ip = self.ip_map[cluster_id]
-            interface = self.interface_map.get(cluster_id, "不明")
+            interface = self.interface_map.get(cluster_id, "Unknown")
             print(f"{cluster_id}: {ip} ({interface})")
         
-        print("\n=== クラスタ情報の収集 ===")
+        print("\n=== Collecting cluster information ===")
         for cluster_id in sorted(self.interface_map.keys(), key=int):
             print(f"{cluster_id}: {self.interface_map[cluster_id]}")
     
     def print_adjacency_matrix(self):
-        """隣接情報を行列形式で表示"""
+        """Print adjacency information in matrix form"""
         cluster_ids = sorted(self.adjacency.keys(), key=int)
         self._print_adjacency_matrix(cluster_ids)
     
     def get_all_links(self) -> List[Tuple[str, str]]:
-        """全てのリンクのリストを取得（重複なし）"""
+        """Get a list of all links (no duplicates)"""
         links = []
         processed = set()
         
         for src_id in sorted(self.adjacency.keys(), key=int):
             for dst_id in self.adjacency[src_id]:
-                # 双方向リンクの重複を避ける（小さいIDを先に）
+                # Avoid duplicates for bidirectional links (smaller ID first)
                 link_pair = tuple(sorted([src_id, dst_id], key=int))
                 if link_pair not in processed:
                     processed.add(link_pair)
@@ -209,37 +209,37 @@ class ClusterInfo:
     
     def prompt_delay_configuration(self) -> Tuple[int, List[Tuple[str, str]], Dict[Tuple[str, str], int]]:
         """
-        ユーザーに遅延設定を尋ねる
+        Ask the user for delay configuration
         
         Returns:
-            (選択タイプ, 選択されたリンクリスト, 遅延設定辞書 {(src, dst): delay_ms})
+            (selection type, selected link list, delay configuration dictionary {(src, dst): delay_ms})
         """
-        print("\n=== リンク遅延設定 ===")
-        print("遅延を設定する対象を選択してください:")
-        print("  0. 全リンクに対して遅延設定")
-        print("  1. 一部のリンクに対して手動で遅延設定")
-        print("  2. 既存の遅延設定を削除")
-        print("  3. 遅延なし(終了)")
+        print("\n=== Link Delay Configuration ===")
+        print("Select the target for delay configuration:")
+        print("  0. Set delay for all links")
+        print("  1. Manually set delay for some links")
+        print("  2. Remove existing delay settings")
+        print("  3. No delay (exit)")
         
         while True:
             try:
-                choice = input("\n選択 (0-3): ").strip()
+                choice = input("\nSelect (0-3): ").strip()
                 if choice not in ['0', '1', '2', '3']:
-                    print("エラー: 0, 1, 2, 3 のいずれかを入力してください")
+                    print("Error: Please enter one of 0, 1, 2, 3")
                     continue
                 
                 choice_num = int(choice)
                 
-                # 3. 遅延なし
+                # 3. No delay
                 if choice_num == 3:
-                    print("遅延設定をスキップします.")
+                    print("Skipping delay configuration.")
                     return (4, [], {})
                 
-                # 2. 遅延削除
+                # 2. Remove existing delay settings
                 if choice_num == 2:
                     return (3, [], {})
                 
-                # 0. 全リンク
+                # 0. All links
                 if choice_num == 0:
                     all_links = self.get_all_links()
                     delay_config = self._configure_all_links_delay(all_links)
@@ -248,52 +248,52 @@ class ClusterInfo:
                     else:
                         continue
                 
-                # 1. 一部のリンク(手動選択)
+                # 1. Some links (manual selection)
                 if choice_num == 1:
                     selected_links = self._select_specific_links()
                     if selected_links:
                         delay_ms = self._get_delay_input()
                         delay_config = {link: delay_ms for link in selected_links}
-                        print(f"\n選択された {len(selected_links)} リンクに {delay_ms}ms の遅延を設定します.")
+                        print(f"\nSetting {delay_ms}ms delay for {len(selected_links)} selected links.")
                         return (2, selected_links, delay_config)
                     else:
-                        print("リンクが選択されませんでした.")
+                        print("No links were selected.")
                         continue
                         
             except KeyboardInterrupt:
-                print("\n\n中断されました.")
+                print("\n\nInterrupted.")
                 sys.exit(0)
             except Exception as e:
-                print(f"エラー: {e}")
+                print(f"Error: {e}")
                 continue
     
     def _configure_all_links_delay(self, all_links: List[Tuple[str, str]]) -> Optional[Dict[Tuple[str, str], int]]:
         """
-        全リンクに対する遅延設定方法を選択
+        Select delay configuration method for all links
         
         Returns:
-            遅延設定辞書 {(src, dst): delay_ms} または None
+            Delay configuration dictionary {(src, dst): delay_ms} or None
         """
-        print(f"\n全 {len(all_links)} リンクの遅延設定方法を選択してください:")
-        print("  0. 手動で同じ遅延を設定")
-        print("  1. ランダムに遅延を割り当て")
+        print(f"\nSelect delay configuration method for all {len(all_links)} links:")
+        print("  0. Manually set the same delay")
+        print("  1. Assign random delays")
         
         while True:
             try:
-                method = input("\n選択 (0-1): ").strip()
+                method = input("\nSelect (0-1): ").strip()
                 if method not in ['0', '1']:
-                    print("エラー: 0 または 1 を入力してください")
+                    print("Error: Please enter 0 or 1")
                     continue
                 
                 if method == '0':
-                    # 手動で同じ遅延
+                    # Manually set the same delay
                     delay_ms = self._get_delay_input()
                     delay_config = {link: delay_ms for link in all_links}
-                    print(f"\n全 {len(all_links)} リンクに {delay_ms}ms の遅延を設定します.")
+                    print(f"\nSetting {delay_ms}ms delay for all {len(all_links)} links.")
                     return delay_config
                 
                 else:
-                    # ランダムに遅延を割り当て
+                    # Assign random delays
                     delay_config = self._assign_random_delays(all_links)
                     if delay_config:
                         return delay_config
@@ -301,162 +301,162 @@ class ClusterInfo:
                         continue
                         
             except Exception as e:
-                print(f"エラー: {e}")
+                print(f"Error: {e}")
                 continue
     
     def _assign_random_delays(self, links: List[Tuple[str, str]]) -> Optional[Dict[Tuple[str, str], int]]:
         """
-        リンクにランダムな遅延を割り当て
+        Assign random delays to links
         
         Returns:
-            遅延設定辞書 {(src, dst): delay_ms} または None
+            Delay configuration dictionary {(src, dst): delay_ms} or None
         """
         import random
         
-        print("\nランダム遅延の設定:")
+        print("\nRandom delay configuration:")
         
-        # 遅延範囲を入力
+        # Enter delay range
         while True:
             try:
-                min_delay_input = input("最小遅延 (ms) [デフォルト: 10]: ").strip()
+                min_delay_input = input("Minimum delay (ms) [default: 10]: ").strip()
                 min_delay = int(min_delay_input) if min_delay_input else 10
                 
-                max_delay_input = input("最大遅延 (ms) [デフォルト: 100]: ").strip()
+                max_delay_input = input("Maximum delay (ms) [default: 100]: ").strip()
                 max_delay = int(max_delay_input) if max_delay_input else 100
                 
                 if min_delay < 0 or max_delay < 0:
-                    print("エラー: 正の整数を入力してください")
+                    print("Error: Please enter positive integers")
                     continue
                 
                 if min_delay > max_delay:
-                    print("エラー: 最小遅延は最大遅延以下である必要があります")
+                    print("Error: Minimum delay must be less than or equal to maximum delay")
                     continue
                 
                 break
                 
             except ValueError:
-                print("エラー: 数値を入力してください")
+                print("Error: Please enter a number")
         
-        # ランダムに遅延を割り当て
+        # Assign random delays
         delay_config = {}
         for link in links:
             delay_config[link] = random.randint(min_delay, max_delay)
         
-        # サンプル表示
-        print(f"\nランダムに割り当てられた遅延 (サンプル、最初の5リンク):")
+        # Sample display
+        print(f"\nRandomly assigned delays (sample, first 5 links):")
         for i, (link, delay) in enumerate(list(delay_config.items())[:5], 1):
             src, dst = link
-            print(f"  {i}. クラスタ {src} - クラスタ {dst}: {delay}ms")
+            print(f"  {i}. Cluster {src} - Cluster {dst}: {delay}ms")
         
         if len(links) > 5:
-            print(f"  ... 他 {len(links) - 5} リンク")
+            print(f"  ... and {len(links) - 5} more links")
         
-        confirm = input("\nこの設定でよろしいですか？ (y/n): ").strip().lower()
+        confirm = input("\nIs this configuration okay? (y/n): ").strip().lower()
         if confirm in ['y', 'yes']:
             return delay_config
         else:
             return None
     
     def _get_delay_input(self) -> int:
-        """遅延時間の入力を取得"""
+        """Get delay time input"""
         while True:
             try:
-                delay_input = input("遅延時間 (ms) [デフォルト: 10]: ").strip()
+                delay_input = input("Delay time (ms) [default: 10]: ").strip()
                 if not delay_input:
                     return 10
                 delay_ms = int(delay_input)
                 if delay_ms < 0:
-                    print("エラー: 正の整数を入力してください")
+                    print("Error: Please enter a positive integer")
                     continue
                 return delay_ms
             except ValueError:
-                print("エラー: 数値を入力してください")
+                print("Error: Please enter a number")
     
     def _select_specific_links(self) -> List[Tuple[str, str]]:
-        """特定のリンクを選択"""
+        """Select specific links"""
         all_links = self.get_all_links()
         
-        print("\n利用可能なリンク:")
+        print("\nAvailable links:")
         for i, (src, dst) in enumerate(all_links, 1):
-            print(f"  {i}. クラスタ {src} - クラスタ {dst}")
+            print(f"  {i}. Cluster {src} - Cluster {dst}")
         
-        print("\n選択方法:")
-        print("  - 単一: 1")
-        print("  - 複数: 1,3,5")
-        print("  - 範囲: 1-5")
-        print("  - 混合: 1,3-5,7")
+        print("\nSelection methods:")
+        print("  - Single: 1")
+        print("  - Multiple: 1,3,5")
+        print("  - Range: 1-5")
+        print("  - Mixed: 1,3-5,7")
         
         while True:
             try:
-                selection = input("\nリンク番号を入力: ").strip()
+                selection = input("\nEnter link numbers: ").strip()
                 if not selection:
-                    print("エラー: 入力が空です")
+                    print("Error: Input is empty")
                     continue
                 
                 selected_indices = self._parse_selection(selection, len(all_links))
                 selected_links = [all_links[i-1] for i in selected_indices]
                 
-                # 確認表示
-                print("\n選択されたリンク:")
+                # Confirmation display
+                print("\nSelected links:")
                 for src, dst in selected_links:
-                    print(f"  - クラスタ {src} - クラスタ {dst}")
+                    print(f"  - Cluster {src} - Cluster {dst}")
                 
-                confirm = input("\nこれでよろしいですか？ (y/n): ").strip().lower()
+                confirm = input("\nIs this okay? (y/n): ").strip().lower()
                 if confirm in ['y', 'yes']:
                     return selected_links
                 
             except ValueError as e:
-                print(f"エラー: {e}")
+                print(f"Error: {e}")
     
 
     def _parse_selection(self, selection: str, max_num: int) -> List[int]:
-        """選択文字列をパース (例: "1,3-5,7" -> [1,3,4,5,7])"""
+        """Parse selection string (e.g., "1,3-5,7" -> [1,3,4,5,7])"""
         indices = set()
         
         for part in selection.split(','):
             part = part.strip()
             
-            # 範囲指定 (例: 3-5)
+            # Range specification (e.g., 3-5)
             if '-' in part:
                 try:
                     start, end = part.split('-')
                     start, end = int(start.strip()), int(end.strip())
                     if start < 1 or end > max_num or start > end:
-                        raise ValueError(f"範囲 {start}-{end} が無効です (1-{max_num} の範囲で指定)")
+                        raise ValueError(f"Range {start}-{end} is invalid (must be within 1-{max_num})")
                     indices.update(range(start, end + 1))
                 except ValueError as e:
-                    raise ValueError(f"範囲指定が無効です: {part}")
+                    raise ValueError(f"Invalid range specification: {part}")
             
-            # 単一指定 (例: 3)
+            # Single specification (e.g., 3)
             else:
                 try:
                     num = int(part)
                     if num < 1 or num > max_num:
-                        raise ValueError(f"番号 {num} が無効です (1-{max_num} の範囲で指定)")
+                        raise ValueError(f"Number {num} is invalid (must be within 1-{max_num})")
                     indices.add(num)
                 except ValueError:
-                    raise ValueError(f"無効な番号: {part}")
+                    raise ValueError(f"Invalid number: {part}")
         
         return sorted(indices)
     
     def apply_delay(self, delay_config: Dict[Tuple[str, str], int]) -> bool:
         """
-        tcコマンドを使用してリンクに遅延を設定（片方向のみ）
+        Use the tc command to set delay on links (one direction only)
         
         Args:
-            delay_config: {(src_id, dst_id): delay_ms} の辞書
+            delay_config: Dictionary of {(src_id, dst_id): delay_ms}
         
         Returns:
-            成功した場合True
+            True if successful
         """
-        print("\n=== 遅延設定の適用 ===")
-        print("注: 片方向のみに遅延を設定します")
+        print("\n=== Applying delay settings ===")
+        print("Note: Delay is set in one direction only")
         
         success_count = 0
         fail_count = 0
         
         for (src_id, dst_id), delay_ms in delay_config.items():
-            # 片方向のみに設定（小さいIDから大きいIDへの方向）
+            # Set delay in one direction only (from smaller ID to larger ID)
             if int(src_id) < int(dst_id):
                 direction_src, direction_dst = src_id, dst_id
             else:
@@ -464,43 +464,43 @@ class ClusterInfo:
             
             if self._apply_delay_single_direction(direction_src, direction_dst, delay_ms):
                 success_count += 1
-                # 成功した場合、current_delaysを更新
+                # Update current_delays on success
                 self.current_delays[(direction_src, direction_dst)] = delay_ms
             else:
                 fail_count += 1
         
-        print(f"\n設定完了: 成功 {success_count}, 失敗 {fail_count}")
+        print(f"\nSettings applied: Success {success_count}, Fail {fail_count}")
         return fail_count == 0
     
     def _apply_delay_single_direction(self, src_id: str, dst_id: str, delay_ms: int) -> bool:
         """
-        単一方向の遅延を設定
+        Set delay in a single direction
         
         Args:
-            src_id: 送信元クラスタID
-            dst_id: 宛先クラスタID
-            delay_ms: 遅延時間(ミリ秒)
+            src_id: Source cluster ID
+            dst_id: Destination cluster ID
+            delay_ms: Delay time (milliseconds)
         
         Returns:
-            成功した場合True
+            True if successful
         """
-        # コンテナ名を取得
+        # Get container name
         container = f"Cluster{src_id}_LB"
         
-        # インターフェース名を取得
+        # Get interface name
         interface = self.interface_map.get(src_id)
         if not interface:
-            print(f"エラー: クラスタ {src_id} のインターフェースが見つかりません")
+            print(f"Error: Interface for cluster {src_id} not found")
             return False
         
-        # 宛先IPアドレスを取得
+        # Get destination IP address
         dst_ip = self.adjacency_ips.get(src_id, {}).get(dst_id)
         if not dst_ip:
-            print(f"エラー: クラスタ {src_id} -> {dst_id} の宛先IPが見つかりません")
+            print(f"Error: Destination IP for cluster {src_id} -> {dst_id} not found")
             return False
         
         try:
-            # tcコマンドが利用可能か確認
+            # Check if tc command is available
             check_result = subprocess.run(
                 ['docker', 'exec', '--privileged', container, 'sh', '-c', 'command -v tc'],
                 capture_output=True,
@@ -508,17 +508,17 @@ class ClusterInfo:
             )
             
             if check_result.returncode != 0:
-                print(f"警告: {container} でtcコマンドが利用できません")
+                print(f"Warning: tc command is not available in {container}")
                 return False
             
-            # 1. qdisc設定を確認し、必要に応じて初期化
+            # 1. Check qdisc settings and initialize if necessary
             check_qdisc = subprocess.run(
                 ['docker', 'exec', '--privileged', container, 'tc', 'qdisc', 'show', 'dev', interface],
                 capture_output=True,
                 text=True
             )
             
-            # prioがなければ追加
+            # Add prio qdisc if not present
             if 'prio' not in check_qdisc.stdout:
                 subprocess.run(
                     ['docker', 'exec', '--privileged', container, 'tc', 'qdisc', 'add', 'dev', interface,
@@ -526,9 +526,9 @@ class ClusterInfo:
                     check=True,
                     capture_output=True
                 )
-                print(f"  {container} ({interface}): prio qdisc 設定完了")
+                print(f"  {container} ({interface}): prio qdisc set")
             
-            # 2. netem qdiscを設定
+            # 2. Set netem qdisc
             subprocess.run(
                 ['docker', 'exec', '--privileged', container, 'tc', 'qdisc', 'replace', 'dev', interface,
                  'parent', '1:3', 'handle', '30:', 'netem', 'delay', f'{delay_ms}ms'],
@@ -536,7 +536,7 @@ class ClusterInfo:
                 capture_output=True
             )
             
-            # 3. u32フィルタで宛先IPに応じてトラフィックを振り分け
+            # 3. Distribute traffic based on destination IP using u32 filter
             subprocess.run(
                 ['docker', 'exec', '--privileged', container, 'tc', 'filter', 'add', 'dev', interface,
                  'protocol', 'ip', 'parent', '1:0', 'prio', '1', 'u32',
@@ -545,26 +545,26 @@ class ClusterInfo:
                 capture_output=True
             )
             
-            print(f"  {container} -> {dst_ip} ({dst_id}): {delay_ms}ms 遅延設定完了")
+            print(f"  {container} -> {dst_ip} ({dst_id}): {delay_ms}ms delay set")
             return True
             
         except subprocess.CalledProcessError as e:
-            print(f"エラー: {container} での tc コマンド実行に失敗: {e}")
+            print(f"Error: Failed to execute tc command in {container}: {e}")
             if e.stderr:
-                print(f"  詳細: {e.stderr.decode() if isinstance(e.stderr, bytes) else e.stderr}")
+                print(f"  Details: {e.stderr.decode() if isinstance(e.stderr, bytes) else e.stderr}")
             return False
         except Exception as e:
-            print(f"エラー: {container} での遅延設定に失敗: {e}")
+            print(f"Error: Failed to set delay in {container}: {e}")
             return False
     
     def remove_delay(self) -> bool:
         """
-        全てのコンテナから遅延設定を削除
+        Remove delay settings from all containers
         
         Returns:
-            成功した場合True
+            True if successful
         """
-        print("\n=== 遅延設定の削除 ===")
+        print("\n=== Removing delay settings ===")
         
         success_count = 0
         fail_count = 0
@@ -575,32 +575,32 @@ class ClusterInfo:
             else:
                 fail_count += 1
         
-        # 削除成功時はcurrent_delaysをクリア
+        # Clear current_delays if all removals were successful
         if fail_count == 0:
             self.current_delays.clear()
         
-        print(f"\n削除完了: 成功 {success_count}, 失敗 {fail_count}")
+        print(f"\nRemoval complete: Success {success_count}, Fail {fail_count}")
         return fail_count == 0
     
     def _remove_delay_single_container(self, cluster_id: str) -> bool:
         """
-        単一コンテナから遅延設定を削除
+        Remove delay settings from a single container
         
         Args:
-            cluster_id: クラスタID
+            cluster_id: Cluster ID
         
         Returns:
-            成功した場合True
+            True if successful
         """
         container = f"Cluster{cluster_id}_LB"
         interface = self.interface_map.get(cluster_id)
         
         if not interface:
-            print(f"エラー: クラスタ {cluster_id} のインターフェースが見つかりません")
+            print(f"Error: Interface for cluster {cluster_id} not found")
             return False
         
         try:
-            # tcコマンドが利用可能か確認
+            # Check if tc command is available
             check_result = subprocess.run(
                 ['docker', 'exec', '--privileged', container, 'sh', '-c', 'command -v tc'],
                 capture_output=True,
@@ -608,129 +608,129 @@ class ClusterInfo:
             )
             
             if check_result.returncode != 0:
-                print(f"警告: {container} でtcコマンドが利用できません")
+                print(f"Warning: tc command is not available in {container}")
                 return False
             
-            # qdisc設定を確認
+            # Check qdisc settings
             check_qdisc = subprocess.run(
                 ['docker', 'exec', '--privileged', container, 'tc', 'qdisc', 'show', 'dev', interface],
                 capture_output=True,
                 text=True
             )
             
-            # qdisc設定がない場合はスキップ
+            # Skip if no qdisc settings
             if 'qdisc prio' not in check_qdisc.stdout and 'qdisc noqueue' in check_qdisc.stdout:
-                print(f"  {container} ({interface}): 遅延設定なし(スキップ)")
+                print(f"  {container} ({interface}): No delay settings (skip)")
                 return True
             
-            # root qdiscを削除(全てのフィルタとネストされたqdiscも削除される)
+            # Delete root qdisc (removes all filters and nested qdiscs)
             subprocess.run(
                 ['docker', 'exec', '--privileged', container, 'tc', 'qdisc', 'del', 'dev', interface, 'root'],
                 check=True,
                 capture_output=True
             )
             
-            print(f"  {container} ({interface}): 遅延設定を削除しました")
+            print(f"  {container} ({interface}): Removed delay settings")
             return True
             
         except subprocess.CalledProcessError as e:
-            # qdisc設定がない場合のエラーは無視
+            # Ignore errors if no qdisc settings
             if 'RTNETLINK answers: No such file or directory' in str(e.stderr):
-                print(f"  {container} ({interface}): 遅延設定なし(スキップ)")
+                print(f"  {container} ({interface}): No delay settings (skip)")
                 return True
             
-            print(f"エラー: {container} での tc コマンド実行に失敗: {e}")
+            print(f"Error: Failed to execute tc command in {container}: {e}")
             if e.stderr:
-                print(f"  詳細: {e.stderr.decode() if isinstance(e.stderr, bytes) else e.stderr}")
+                print(f"  Details: {e.stderr.decode() if isinstance(e.stderr, bytes) else e.stderr}")
             return False
         except Exception as e:
-            print(f"エラー: {container} での遅延削除に失敗: {e}")
+            print(f"Error: Failed to remove delay in {container}: {e}")
             return False
 
 
 def parse_arguments():
-    """コマンドライン引数をパース"""
+    """Parse command-line arguments"""
     parser = argparse.ArgumentParser(
-        description='クラスタ間リンク遅延制御ツール',
+        description='Cluster Link Delay Control Tool',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
-使用方法:
+Usage:
   python3 delayController.py [mode] [options...]
 
-モード:
-  0 : 全リンクに遅延設定
-  1 : 一部リンクに遅延設定
-  2 : 遅延を削除
-  3 : 遅延なし（情報表示のみ）
+Modes:
+  0 : Set delay on all links
+  1 : Set delay on selected links
+  2 : Remove delay
+  3 : No delay (information only)
 
-例:
-  # インタラクティブモード（引数なし）
+Example:
+  # Interactive mode (no arguments)
   python3 delayController.py
   
-  # mode=0: 全リンクに固定遅延
-  python3 delayController.py 0 10          # 全リンクに10ms
-  python3 delayController.py 0 50          # 全リンクに50ms
+  # mode=0: Set fixed delay on all links
+  python3 delayController.py 0 10          # Set 10ms delay on all links
+  python3 delayController.py 0 50          # Set 50ms delay on all links
   
-  # mode=0: 全リンクにランダム遅延
-  python3 delayController.py 0 10:100      # 全リンクに10-100msのランダム遅延
-  python3 delayController.py 0 5:50        # 全リンクに5-50msのランダム遅延
+  # mode=0: Set random delay on all links
+  python3 delayController.py 0 10:100      # Set random delay of 10-100ms on all links
+  python3 delayController.py 0 5:50        # Set random delay of 5-50ms on all links
   
-  # mode=1: 一部リンクに遅延設定（単一設定）
-  python3 delayController.py 1 1 20        # リンク1に20ms
-  python3 delayController.py 1 1,3,5 30    # リンク1,3,5に30ms
-  python3 delayController.py 1 1-5 15      # リンク1〜5に15ms
-  python3 delayController.py 1 1,3-5,7 25  # リンク1,3〜5,7に25ms
+  # mode=1: Set delay on selected links (single setting)
+  python3 delayController.py 1 1 20        # Set 20ms delay on link 1
+  python3 delayController.py 1 1,3,5 30    # Set 30ms delay on links 1, 3, and 5
+  python3 delayController.py 1 1-5 15      # Set 15ms delay on links 1 through 5
+  python3 delayController.py 1 1,3-5,7 25  # Set 25ms delay on links 1, 3 through 5, and 7
   
-  # mode=1: 特定リンクとその他に遅延設定（複数設定）
-  python3 delayController.py 1 3=10 other=1:5       # リンク3に10ms、その他に1-5msランダム
-  python3 delayController.py 1 1,3=20 other=5:50    # リンク1,3に20ms、その他に5-50msランダム
-  python3 delayController.py 1 1-3=100 other=10     # リンク1-3に100ms、その他に10ms
+  # mode=1: Set delay on specific links and others (multiple settings)
+  python3 delayController.py 1 3=10 other=1:5       # Set 10ms delay on link 3, 1-5ms random delay on others
+  python3 delayController.py 1 1,3=20 other=5:50    # Set 20ms delay on links 1, 3, 5-50ms random delay on others
+  python3 delayController.py 1 1-3=100 other=10     # Set 100ms delay on links 1-3, 10ms delay on others
   
-  # mode=2: 遅延削除
+  # mode=2: Remove delay
   python3 delayController.py 2
   
-  # mode=3: 遅延なし
+  # mode=3: No delay
   python3 delayController.py 3
         ''')
     
     parser.add_argument('mode', nargs='?', type=int, choices=[0, 1, 2, 3],
-                        help='動作モード: 0=全リンク, 1=一部選択, 2=削除, 3=なし')
+                        help='Operation mode: 0=all links, 1=selected links, 2=remove, 3=none')
     
     parser.add_argument('args', nargs='*', type=str,
-                        help='mode=0: 遅延値または範囲(10 or 10:100), mode=1: リンク=遅延のペア(1=10 2-3=20 4=5:50)')
+                        help='mode=0: delay value or range (10 or 10:100), mode=1: link=delay pairs (1=10 2-3=20 4=5:50)')
     
     return parser.parse_args()
 
 
 def process_command_line_args(args, cluster_info: ClusterInfo) -> Tuple[int, List[Tuple[str, str]], Dict[Tuple[str, str], int]]:
     """
-    コマンドライン引数を処理して設定を返す
+    Process command-line arguments and return settings
     
     Args:
-        args: argparseの引数
-        cluster_info: ClusterInfoインスタンス
+        args: argparse arguments
+        cluster_info: ClusterInfo instance
     
     Returns:
-        (選択タイプ, 選択されたリンクリスト, 遅延設定辞書)
+        (selection type, selected link list, delay configuration dictionary)
     """
     import random
     
     mode = args.mode
     
-    # mode=3: 遅延なし
+    # mode=3: No delay
     if mode == 3:
         return (4, [], {})
     
-    # mode=2: 遅延削除
+    # mode=2: Remove delay
     if mode == 2:
         return (3, [], {})
     
     all_links = cluster_info.get_all_links()
     
-    # mode=0: 全リンクに遅延設定
+    # mode=0: Set delay on all links
     if mode == 0:
         if not args.args or len(args.args) == 0:
-            print("エラー: 遅延値または範囲を指定してください (例: 10 または 10:100)")
+            print("Error: Please specify a delay value or range (e.g., 10 or 10:100)")
             sys.exit(1)
         
         selected_links = all_links
@@ -738,221 +738,221 @@ def process_command_line_args(args, cluster_info: ClusterInfo) -> Tuple[int, Lis
         
         delay_spec = args.args[0]
         
-        # 遅延値の解析（固定 or ランダム）
+        # Parse delay value (fixed or random)
         if ':' in delay_spec:
-            # ランダム遅延 (例: 10:100)
+            # Random delay (e.g., 10:100)
             try:
                 min_delay, max_delay = delay_spec.split(':')
                 min_delay = int(min_delay)
                 max_delay = int(max_delay)
                 
                 if min_delay > max_delay:
-                    print("エラー: 最小遅延は最大遅延以下である必要があります")
+                    print("Error: Minimum delay must be less than or equal to maximum delay")
                     sys.exit(1)
                 
                 delay_config = {}
                 for link in selected_links:
                     delay_config[link] = random.randint(min_delay, max_delay)
             except ValueError:
-                print(f"エラー: 無効な範囲指定: {delay_spec}")
+                print(f"Error: Invalid range specification: {delay_spec}")
                 sys.exit(1)
         else:
-            # 固定遅延 (例: 10)
+            # Fixed delay (e.g., 10)
             try:
                 delay_ms = int(delay_spec)
                 delay_config = {link: delay_ms for link in selected_links}
             except ValueError:
-                print(f"エラー: 無効な遅延値: {delay_spec}")
+                print(f"Error: Invalid delay value: {delay_spec}")
                 sys.exit(1)
     
-    # mode=1: 一部リンクに遅延設定
+    # mode=1: Set delay on selected links
     elif mode == 1:
         if not args.args or len(args.args) == 0:
-            print("エラー: リンク指定を行ってください")
-            print("例1: python3 delayController.py 1 1,3-5 20           # 従来の形式")
-            print("例2: python3 delayController.py 1 3=10 other=1:5     # 複数形式")
+            print("Error: Please specify links")
+            print("Example 1: python3 delayController.py 1 1,3-5 20           # Traditional format")
+            print("Example 2: python3 delayController.py 1 3=10 other=1:5     # Multiple format")
             sys.exit(1)
         
         delay_config = {}
         selected_links = []
         
-        # 複数形式かどうかを判定（'='が含まれるか）
+        # Determine if multiple format (contains '=')
         if '=' in args.args[0]:
-            # 複数形式: 特定リンク=遅延 other=遅延
+            # Multiple format: specific_link=delay other=delay
             choice_type = 2
             
             if len(args.args) != 2:
-                print("エラー: 複数形式は2つの引数が必要です")
-                print("例: python3 delayController.py 1 3=10 other=1:5")
+                print("Error: Multiple format requires exactly two arguments")
+                print("Example: python3 delayController.py 1 3=10 other=1:5")
                 sys.exit(1)
             
-            # 1つ目: 特定リンクの設定
+            # 1st: specific link settings
             first_spec = args.args[0]
-            # 2つ目: その他のリンクの設定
+            # 2nd: other link settings
             second_spec = args.args[1]
             
             if not second_spec.startswith('other='):
-                print("エラー: 2番目の引数は 'other=遅延' の形式で指定してください")
-                print("例: python3 delayController.py 1 3=10 other=1:5")
+                print("Error: The second argument must be in the format 'other=delay'")
+                print("Example: python3 delayController.py 1 3=10 other=1:5")
                 sys.exit(1)
             
             try:
-                # 特定リンクの解析
+                # Parse specific links
                 links_part, delay_part = first_spec.split('=', 1)
                 
-                # リンク番号をパース
+                # Parse link numbers
                 specific_indices = cluster_info._parse_selection(links_part, len(all_links))
                 specific_links = [all_links[i-1] for i in specific_indices]
                 
-                # 遅延値をパース（固定 or ランダム）
+                # Parse delay value (fixed or random)
                 if ':' in delay_part:
-                    # ランダム遅延
+                    # Random delay
                     min_delay, max_delay = delay_part.split(':')
                     min_delay = int(min_delay)
                     max_delay = int(max_delay)
                     
                     if min_delay > max_delay:
-                        print("エラー: 最小遅延は最大遅延以下である必要があります")
+                        print("Error: Minimum delay must be less than or equal to maximum delay")
                         sys.exit(1)
                     
                     for link in specific_links:
                         delay_config[link] = random.randint(min_delay, max_delay)
                 else:
-                    # 固定遅延
+                    # Fixed delay
                     delay_ms = int(delay_part)
                     for link in specific_links:
                         delay_config[link] = delay_ms
                 
-                # その他のリンクの解析
+                # Parse other links
                 other_delay_part = second_spec.split('=', 1)[1]
                 
-                # その他のリンク（全リンクから特定リンクを除外）
+                # Other links (all links excluding specific links)
                 other_links = [link for link in all_links if link not in specific_links]
                 
-                # その他の遅延値をパース
+                # Parse other delay values
                 if ':' in other_delay_part:
-                    # ランダム遅延
+                    # Random delay
                     min_delay, max_delay = other_delay_part.split(':')
                     min_delay = int(min_delay)
                     max_delay = int(max_delay)
                     
                     if min_delay > max_delay:
-                        print("エラー: 最小遅延は最大遅延以下である必要があります")
+                        print("Error: Minimum delay must be less than or equal to maximum delay")
                         sys.exit(1)
                     
                     for link in other_links:
                         delay_config[link] = random.randint(min_delay, max_delay)
                 else:
-                    # 固定遅延
+                    # Fixed delay
                     delay_ms = int(other_delay_part)
                     for link in other_links:
                         delay_config[link] = delay_ms
                 
-                # 全リンクを選択リストに追加
+                # Add all links to the selected list
                 selected_links = all_links
                 
             except ValueError as e:
-                print(f"エラー: 引数の解析に失敗: {e}")
+                print(f"Error: Failed to parse arguments: {e}")
                 sys.exit(1)
         
         else:
-            # 従来形式: リンク番号と遅延値
+            # Traditional format: link numbers and delay value
             if len(args.args) < 2:
-                print("エラー: リンク番号と遅延値を指定してください")
-                print("例: python3 delayController.py 1 1,3-5 20")
+                print("Error: Please specify link numbers and delay value")
+                print("Example: python3 delayController.py 1 1,3-5 20")
                 sys.exit(1)
             
             choice_type = 2
             
-            # リンク番号をパース
+            # Parse link numbers
             try:
                 selected_indices = cluster_info._parse_selection(args.args[0], len(all_links))
                 selected_links = [all_links[i-1] for i in selected_indices]
             except ValueError as e:
-                print(f"エラー: {e}")
+                print(f"Error: {e}")
                 sys.exit(1)
             
-            # 遅延値をパース
+            # Parse delay value
             try:
                 delay_ms = int(args.args[1])
                 delay_config = {link: delay_ms for link in selected_links}
             except ValueError:
-                print(f"エラー: 無効な遅延値: {args.args[1]}")
+                print(f"Error: Invalid delay value: {args.args[1]}")
                 sys.exit(1)
     
     else:
-        print(f"エラー: 不明なモード: {mode}")
+        print(f"Error: Unknown mode: {mode}")
         sys.exit(1)
     
     return (choice_type, selected_links, delay_config)
 
 
 def main():
-    """メイン処理"""
+    """Main processing"""
     args = parse_arguments()
     cluster_info = ClusterInfo()
     
-    # コンテナ発見
+    # Discover containers
     if not cluster_info.discover_containers():
-        print("Cluster*_LB パターンのコンテナが見つかりませんでした.")
+        print("No containers with the Cluster*_LB pattern were found.")
         sys.exit(1)
     
-    # コンテナ情報表示
+    # Display container information
     cluster_info.print_container_info()
     
-    # ネットワーク情報収集
+    # Collect network information
     cluster_info.collect_network_info()
     
-    # ネットワーク情報表示
+    # Display network information
     cluster_info.print_network_info()
     
-    # 隣接情報読み込み
+    # Load adjacency information
     if cluster_info.load_adjacency_info():
-        # 隣接情報表示
-        print("\n=== 隣接クラスタ情報（行列形式: 接続状況） ===")
+        # Display adjacency information
+        print("\n=== Adjacency Cluster Information (Matrix Format: Connection Status) ===")
         cluster_info.print_adjacency_matrix()
     
-    # コマンドライン引数モード vs インタラクティブモード
+    # Command-line argument mode vs Interactive mode
     if args.mode is not None:
-        # コマンドライン引数モード
+        # Command-line argument mode
         choice_type, selected_links, delay_config = process_command_line_args(
             args, cluster_info)
     else:
-        # インタラクティブモード
+        # Interactive mode
         choice_type, selected_links, delay_config = cluster_info.prompt_delay_configuration()
     
     if choice_type == 4:
-        # 遅延なし
+        # No delay
         return
     
     if choice_type == 3:
-        # 遅延削除
+        # Remove delay
         cluster_info.remove_delay()
-        print("\n=== 削除完了 ===")
+        print("\n=== Removal Complete ===")
         return
     
-    # 選択されたリンクの確認
-    print(f"\n設定内容:")
-    print(f"  対象リンク数: {len(selected_links)}")
+    # Confirm selected links
+    print(f"\nConfiguration:")
+    print(f"  Number of target links: {len(selected_links)}")
     
-    # 遅延設定の統計情報を表示
+    # Display statistics of delay settings
     delays = list(delay_config.values())
     if delays:
         unique_delays = set(delays)
         if len(unique_delays) == 1:
-            print(f"  遅延時間: {delays[0]}ms (全リンク同一)")
+            print(f"  Delay time: {delays[0]}ms (Same for all links)")
         else:
-            print(f"  遅延時間: {min(delays)}ms 〜 {max(delays)}ms (ランダム)")
-            print(f"  平均遅延: {sum(delays) / len(delays):.1f}ms")
+            print(f"  Delay time: {min(delays)}ms 〜 {max(delays)}ms (Random)")
+            print(f"  Average delay: {sum(delays) / len(delays):.1f}ms")
     
-    # 実際のtc設定を実行
+    # Apply actual tc settings
     cluster_info.apply_delay(delay_config)
     
-    # 遅延設定後の行列を表示
-    print("\n=== 隣接クラスタ情報（行列形式: 設定後） ===")
+    # Display adjacency matrix after delay settings
+    print("\n=== Adjacency Cluster Information (Matrix Format: After Settings) ===")
     cluster_info.print_adjacency_matrix()
     
-    print("\n=== 設定完了 ===")
+    print("\n=== Configuration Complete ===")
 
 if __name__ == "__main__":
     main()

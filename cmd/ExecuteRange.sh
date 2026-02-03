@@ -61,7 +61,7 @@ run_experiment() {
   # data formatting
   python3 ../tools/to_average.py $data_dir $KEY
   python3 ../tools/to_median.py $data_dir $KEY
-  ./../tools/jmeter_scrayping.sh $data_dir $attempt
+  ./../tools/jmeter_result_extraction.sh $data_dir $attempt
 
   # write parameters and other information to a file
   timestamp=$(date +"%Y%m%d_%H%M%S")

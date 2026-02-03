@@ -19,7 +19,7 @@ def find_csv_files(directory, cluster_num):
                 full_path = os.path.join(directory, filename)
                 cluster_files.append(full_path)
     except FileNotFoundError:
-        print(f"エラー: 指定されたディレクトリ '{directory}' が見つかりません。")
+        print(f"Error: Specified directory '{directory}' not found.")
         return []
     
     return sorted(cluster_files)
@@ -39,13 +39,13 @@ def remove_empty_rows_per_file(csv_file):
 
     # if drop_index is not None:
     #     df_cleaned = df_cleaned.iloc[:drop_index]
-    #     # print(f"2行連続で同じ数値を検出。{drop_index}行目以降を削除しました。")
+    #     # print(f"Detected two consecutive rows with the same values. Rows from {drop_index} onwards have been removed.")
     # -------------------
     
     directory, base_name = os.path.split(csv_file)
     output_file = os.path.join(directory, f"cleaned_{base_name}")
     df_cleaned.to_csv(output_file, index=False)
-    # print(f"{output_file} を作成しました！（行数: {len(df_cleaned)}）")
+    # print(f"Created {output_file} (rows: {len(df_cleaned)})")
     
     return output_file
 
@@ -53,7 +53,7 @@ def process_all_clusters(input_dir, median_output_file, index):
     selected_columns = ["TotalQueue", "Queue", "CurrentResponse"]
     
     all_data = {cluster: [] for cluster in range(index)}
-    for cluster_num in range(index):  # Cluster0 から Cluster4 まで
+    for cluster_num in range(index): 
         file_paths = find_csv_files(input_dir, cluster_num)
         for file in file_paths:
             cleaned_file = remove_empty_rows_per_file(file)
@@ -120,12 +120,12 @@ def process_all_clusters(input_dir, median_output_file, index):
     median_df = pd.DataFrame(median_results, columns=columns)
     median_df.to_csv(median_output_file, index=False)
     
-    print(f"全クラスタの中央値データを {median_output_file} に出力しました。")
+    print(f"Median data for all clusters has been output to {median_output_file}.")
 
 def main():
-    parser = argparse.ArgumentParser(description="全クラスタのCSVを処理し、中央値を算出")
-    parser.add_argument("directory", type=str, help="CSVファイルが存在するディレクトリを指定")
-    parser.add_argument("cluster_index", type=int, help="クラスタ番号を指定（+1されて処理に使用）")
+    parser = argparse.ArgumentParser(description="Process all cluster CSVs and calculate medians")
+    parser.add_argument("directory", type=str, help="Specify the directory containing CSV files")
+    parser.add_argument("cluster_index", type=int, help="Specify the cluster index (used as +1 in processing)")
     args = parser.parse_args()
 
     adjusted_index = args.cluster_index + 1

@@ -35,18 +35,18 @@ for ((i = 1; i <= attempts; i++)); do
   done
 
   if [[ -z "$matched_log" ]]; then
-    echo "jmeter_${i}_*.log が見つかりません。スキップします。"
+    echo "jmeter_${i}_*.log not found. Skipping."
     continue
   fi
 
   line=$(grep "summary =" "$matched_log" | tail -n 1)
 
   if [[ -z "$line" ]]; then
-    echo "summary 行が $matched_log に見つかりません。スキップします。"
+    echo "summary line not found in $matched_log. Skipping."
     continue
   fi
 
-  # 各項目抽出
+  # Extract each item
   total=$(echo "$line" | awk -F'summary = | in' '{print $2}' | tr -d ' ')
   reqps=$(echo "$line" | awk -F'= |/s' '{print $(NF-1)}')
   avg=$(echo "$line" | awk -F'Avg: *' '{print $2}' | awk '{print $1}')
@@ -54,8 +54,7 @@ for ((i = 1; i <= attempts; i++)); do
   max=$(echo "$line" | awk -F'Max: *' '{print $2}' | awk '{print $1}')
   err=$(echo "$line" | awk -F'Err: *' '{print $2}' | awk '{print $1}')
 
-  # 出力
   echo "$total,$reqps,$avg,$min,$max,$err" >> "$output"
 done
 
-echo "CSV出力完了: $output"
+echo "CSV output completed: $output"

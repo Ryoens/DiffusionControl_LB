@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # ----------------------
-# ユーザー定義パラメータ
+# User-defined parameters
 # ----------------------
-MAIN_URL="${1}"                   # 1番目の引数: フラッシュクラウド対象LBのURL
-DURATION_SEC="${2:-60}"            # 2番目の引数: 負荷時間（秒）
-MAIN_THREADS="${3:-50}"            # 3番目の引数: フラッシュクラウド対象LBの同時接続数
-NUM_CLUSTER="${4:-20}"
+MAIN_URL="${1}"                   # 1st argument: URL of the flash cloud target LB
+DURATION_SEC="${2:-60}"            # 2nd argument: Load duration (seconds)
+MAIN_THREADS="${3:-50}"            # 3rd argument: Concurrent connections for the flash cloud target LB
+NUM_CLUSTER="${4:-20}"             # 4th argument: Number of clusters
 
 all_targets=()
 count=0
@@ -19,7 +19,7 @@ echo $MAIN_URL $DURATION_SEC $MAIN_THREADS $NUM_CLUSTER
 echo ${all_targets[*]}
 
 # ----------------------
-# jmxテンプレートの自動生成
+# Automatic generation of jmx template
 # ----------------------
 echo "Creating temp_test.jmx ..."
 cat <<EOF > temp_test.jmx
@@ -39,7 +39,7 @@ cat <<EOF > temp_test.jmx
 EOF
 
 # ----------------------
-# 各ターゲット用のThreadGroupを生成
+# Generate ThreadGroup for each target
 # ----------------------
 for target in "${all_targets[@]}"; do
     ip=$(echo "$target" | sed -E 's/^"(.*)"$/\1/' | sed -E 's~https?://([^:/]+).*~\1~')
@@ -47,10 +47,10 @@ for target in "${all_targets[@]}"; do
     clean_target=$(echo "$target" | tr -d '"' | sed 's:/$::')
 
     if [ "$clean_target" = "$MAIN_URL" ]; then
-        # フラッシュクラウド対象LB
+        # Flash cloud target LB
         threads=$MAIN_THREADS
     else
-        # その他LB
+        # Other LBs
         threads=$(( MAIN_THREADS / 10 ))
     fi
 
@@ -89,7 +89,7 @@ EOF
 done
 
 # ----------------------
-# JMXファイル閉じる
+# Close JMX file
 # ----------------------
 cat <<EOF >> temp_test.jmx
     </hashTree>
@@ -98,7 +98,7 @@ cat <<EOF >> temp_test.jmx
 EOF
 
 # ----------------------
-# JMeter テスト実行
+# Run JMeter test
 # ----------------------
 echo "Running JMeter test..."
 jmeter -n -t temp_test.jmx -l ../log/result_${DURATION_SEC}s.jtl -j ../log/jmeter.log -Jxstream.security.allow=com.thoughtworks.xstream.security.AnyTypePermission
