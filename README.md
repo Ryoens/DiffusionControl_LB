@@ -1,4 +1,4 @@
-# DC方式 (Diffusion Control)
+# Load Balancing Method based on Diffusion Control
 NW上の拡散方程式を使用することでLB間のリクエストを平滑化する負荷分散方式
 重みづけラウンドロビン方式を動的にしたもの
 
@@ -29,3 +29,6 @@ NW上の拡散方程式を使用することでLB間のリクエストを平滑�
 コンテナの削除
 
 `make destroy [コンテナ数]`
+
+## License
+MIT
