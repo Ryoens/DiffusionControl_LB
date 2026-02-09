@@ -1,16 +1,23 @@
 # Load Balancing Method based on Diffusion Control
 
 ## 概要
-NW上の拡散方程式に基づいてノード間で自律分散的に動作する負荷分散方式
-- NW上に複数のLBが無向グラフで形成
-- gRPCによるフィードバック情報の取得
-    - 隣接LB間で以下の制御情報を送受信
-        - セッション数
-    - サーバ: 現在のセッション数を送信
-    - クライアント: 隣接LBからセッション数を受信
-- 転送するリクエスト数
+隣接するロードバランサ(LB)間で自律分散制御を行う負荷分散方式(DC方式)
+
+負荷分散アルゴリズムとして**ネットワーク上の拡散方程式**を使用
+
+NW上に複数のクラスタが広域分散環境上に存在する環境を想定
+- クラスタの機能
+  - LB: リクエストの移譲先指定と移譲
+  - Web: セッションを処理するWebサーバ
+- ネットワーク上の拡散方程式
+  - 移譲するリクエスト数(セッション差分が正の場合のみ)
     - 拡散係数 × (自身のセッション数 - 隣接のセッション数)
-- 隣接LBへのリクエスト転送可否を閾値により判断
+- 本システムの通信処理
+  - クラスタ内
+    - LBからWebにRRで移譲
+  - クラスタ間
+    - 提案方式(DC)に基づいてリクエスト移譲
+    - LB間でセッションを送受信するフィードバック通信処理(gRPCで実装)
 
 ## ファイル構成
 
@@ -60,9 +67,8 @@ apt install curl golang-go protobuf-compiler jmeter make python3-pip
 ```
 
 ### コンテナ構築
-`cmd/DockerBuild.sh`を実行
-
-`make build [クラスタ数]`
+- `make build [クラスタ数]`
+  - `cmd/DockerBuild.sh`を実行
 
 1. 各クラスタのWebサーバ数を指定
 2. Dockerイメージ`LB`が存在しなければ作成
@@ -75,11 +81,8 @@ apt install curl golang-go protobuf-compiler jmeter make python3-pip
         - Web: `"web*": "[IP address]"`
 
 ### プログラムの実行
-`cmd/Execute.sh`を実行
-
-※ 遅延設定は未導入
-
-`make exec`
+- `make exec`
+  - `cmd/Execute.sh`を実行 ※ 遅延設定は未導入
 
 1. 実験パラメータの設定
     - フィードバック間隔、閾値、拡散係数を入力
@@ -109,11 +112,8 @@ apt install curl golang-go protobuf-compiler jmeter make python3-pip
     - 実験パラメータの記録
 
 ### コンテナ削除
-`cmd/DockerDestroy.sh`を実行
-
-`make destroy [コンテナ数]`
-
-### トラブルシューティング
+- `make destroy [コンテナ数]`
+  - `cmd/DockerDestroy.sh`を実行
 
 ## License
 MIT
