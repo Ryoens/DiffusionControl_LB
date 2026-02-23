@@ -175,6 +175,10 @@ echo $apply_file $compiled_file
 python3 ../tools/adjacentListController.py $nw_model ${cls[@]} ${web[@]}
 echo "Created adjacentList per cluster"
 
+# set delay between clusters (manual setting)
+python3 ../tools/delayController.py
+echo "Set delay between clusters"
+
 count=0
 
 # set nameserver, build

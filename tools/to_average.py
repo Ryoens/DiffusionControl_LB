@@ -59,7 +59,8 @@ def process_all_clusters(input_dir, avg_output_file, index):
             cleaned_file = remove_empty_rows_per_file(file)
             df = pd.read_csv(cleaned_file)
             if all(col in df.columns for col in selected_columns):
-                all_data[cluster_num].append(df[selected_columns])
+                df_selected = df[selected_columns].apply(pd.to_numeric, errors='coerce')
+                all_data[cluster_num].append(df_selected)
                 
     max_length = max(
         max(len(df) for df in cluster_data) if cluster_data else 0
@@ -87,6 +88,7 @@ def process_all_clusters(input_dir, avg_output_file, index):
                     if row < len(df)
                 ])
                 if stacked_data.size > 0:
+                    stacked_data = stacked_data.astype(np.float64)
                     avg_value = np.nanmean(stacked_data, axis=0)
 
                     # If even one NaN is found, stop

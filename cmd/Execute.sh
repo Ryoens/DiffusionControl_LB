@@ -51,6 +51,10 @@ echo ${cls[@]} ${web[@]}
 python3 ../tools/adjacentListController.py $nw_model ${cls[@]} ${web[@]}
 echo "Created adjacentList per cluster"
 
+# set delay between clusters (manual setting)
+python3 ../tools/delayController.py
+echo "Set delay between clusters"
+
 # get number of clusters from container count
 container=$(docker ps --filter "name=_LB" --format "{{.Names}}" | head -n 1)
 # KEY=${container:7:1}
@@ -172,6 +176,7 @@ do
 done
 
 # data formatting
+echo $data_dir
 python3 ../tools/to_average.py $data_dir $KEY
 python3 ../tools/to_median.py $data_dir $KEY
 
